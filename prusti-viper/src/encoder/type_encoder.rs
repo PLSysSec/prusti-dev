@@ -264,7 +264,7 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
                 Some((0.into(), std::char::MAX.into()))
             }
             ty::TyKind::Bool | ty::TyKind::Ref(_, _, _) => None,
-            ref x => unreachable!("{:?}", x),
+            ref x => None, //unreachable!("{:?}", x),
         }
     }
 
