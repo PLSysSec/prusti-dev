@@ -804,13 +804,14 @@ impl<'p, 'v: 'p, 'tcx: 'v> BackwardMirInterpreter<'tcx>
 
                                 // Return an error for unsupported old(..) types
                                 let tcx = self.encoder.env().tcx();
+                                /*
                                 if !is_supported_type_of_pure_expression(tcx, ty) {
                                     return Err(SpannedEncodingError::incorrect(
                                         "the type of the old expression is invalid",
                                         term.source_info.span,
                                     ));
                                 }
-
+                                */
                                 let encoded_rhs = self
                                     .mir_encoder
                                     .encode_old_expr(
