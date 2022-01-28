@@ -98,7 +98,7 @@ pub fn compute_identifier(name: &str, formal_args: &[LocalVar], return_type: &Ty
     }
     for arg in formal_args {
         identifier.push_str(&type_name(&arg.typ));
-        identifier.push_str("$");
+        identifier.push('$');
     }
     identifier.push_str(&type_name(return_type));
     identifier
@@ -111,7 +111,7 @@ impl WithIdentifier for Function {
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct FunctionIdentifier(String);
+pub struct FunctionIdentifier(pub(crate) String);
 
 impl From<String> for FunctionIdentifier {
     fn from(string: String) -> Self {

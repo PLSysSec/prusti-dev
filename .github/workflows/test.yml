@@ -32,13 +32,7 @@ jobs:
       - name: Set up the environment
         run: python x.py setup
       - name: Cache cargo
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock', 'rust-toolchain') }}
+        uses: Swatinem/rust-cache@v1.3.0
       - name: Build with cargo
         run: python x.py build --all --verbose
       - name: Run "quick" cargo tests
@@ -64,27 +58,20 @@ jobs:
       - name: Set up the environment
         run: python x.py setup
       - name: Cache cargo
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock', 'rust-toolchain') }}
+        uses: Swatinem/rust-cache@v1.3.0
       - name: Build with cargo
         run: python x.py build --all --verbose
       - name: Check and report Clippy errors
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          rustup component add clippy
+
+          python ./x.py clippy -- -D warnings
+
           cargo install cargo-diff-tools
-          if rustup component add clippy
-          then
-            # See https://github.com/pytorch/pytorch/blob/49adac65c4228b9fe7ede4e6f99fe9e1ccdc3e16/.github/workflows/clang_format.yml
-            git remote add upstream https://github.com/viperproject/prusti-dev
-            git fetch upstream "$GITHUB_BASE_REF"
-            python x.py exec cargo-clippy-diff --output=github $BASE_SHA HEAD
-          fi
+          # See https://github.com/pytorch/pytorch/blob/49adac65c4228b9fe7ede4e6f99fe9e1ccdc3e16/.github/workflows/clang_format.yml
+          git remote add upstream https://github.com/viperproject/prusti-dev
+          git fetch upstream "$GITHUB_BASE_REF"
+          python x.py exec cargo-clippy-diff --output=github $BASE_SHA HEAD
 
   # Run rustfmt checks on PRs.
   fmt-check:
@@ -98,20 +85,19 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: '3.x'
-      - name: Cache cargo
-        uses: actions/cache@v2
+      - uses: actions/setup-java@v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock', 'rust-toolchain') }}
+          java-version: '15'
+      - name: Set up the environment
+        run: python x.py setup
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v1.3.0
+      - name: Build with cargo
+        run: python x.py build --all --verbose
       - name: Check and report formatting warnings
         run: |
-          if rustup component add rustfmt
-          then
-            cd vir && cargo fmt -- --check
-          fi
+          rustup component add rustfmt
+          python ./x.py fmt-check-all
 
   # Run a subset of the tests with the purification optimization enabled
   # to ensure that we do not introduce regressions.
@@ -132,13 +118,7 @@ jobs:
       - name: Set up the environment
         run: python x.py setup
       - name: Cache cargo
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock', 'rust-toolchain') }}
+        uses: Swatinem/rust-cache@v1.3.0
       - name: Build with cargo
         run: python x.py build --all --verbose
       - name: Run "quick" cargo tests
@@ -179,6 +159,8 @@ jobs:
           java-version: '15'
       - name: Set up the environment
         run: python x.py setup
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v1.3.0
       - name: Build with cargo
         run: python x.py build --all --verbose
       - name: Run cargo tests

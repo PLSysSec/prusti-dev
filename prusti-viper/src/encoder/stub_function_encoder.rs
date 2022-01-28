@@ -4,9 +4,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+use crate::encoder::high::types::HighTypeEncoderInterface;
 use crate::encoder::mir_encoder::{MirEncoder, PlaceEncoder};
 use crate::encoder::Encoder;
-use prusti_common::vir;
+use crate::encoder::snapshot::interface::SnapshotEncoderInterface;
+use vir_crate::polymorphic as vir;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
 use log::{trace, debug};
@@ -14,12 +16,16 @@ use crate::encoder::errors::SpannedEncodingError;
 use crate::encoder::errors::WithSpan;
 use crate::encoder::errors::EncodingResult;
 use crate::encoder::errors::SpannedEncodingResult;
+use crate::encoder::mir::types::MirTypeEncoderInterface;
+
+use super::encoder::SubstMap;
 
 pub struct StubFunctionEncoder<'p, 'v: 'p, 'tcx: 'v> {
     encoder: &'p Encoder<'v, 'tcx>,
     mir: &'p mir::Body<'tcx>,
     mir_encoder: MirEncoder<'p, 'v, 'tcx>,
     proc_def_id: DefId,
+    tymap: &'p SubstMap<'tcx>,
 }
 
 impl<'p, 'v: 'p, 'tcx: 'v> StubFunctionEncoder<'p, 'v, 'tcx> {
@@ -27,6 +33,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> StubFunctionEncoder<'p, 'v, 'tcx> {
         encoder: &'p Encoder<'v, 'tcx>,
         proc_def_id: DefId,
         mir: &'p mir::Body<'tcx>,
+        tymap: &'p SubstMap<'tcx>,
     ) -> Self {
         trace!("StubFunctionEncoder constructor: {:?}", proc_def_id);
         StubFunctionEncoder {
@@ -34,13 +41,14 @@ impl<'p, 'v: 'p, 'tcx: 'v> StubFunctionEncoder<'p, 'v, 'tcx> {
             mir,
             mir_encoder: MirEncoder::new(encoder, mir, proc_def_id),
             proc_def_id,
+            tymap,
         }
     }
 
     pub fn encode_function(&self) -> SpannedEncodingResult<vir::Function> {
         let function_name = self.encode_function_name();
         debug!("Encode stub function {}", function_name);
-        let subst_strings = self.encoder.type_substitution_strings().with_span(self.mir.span)?;
+        let substs = &self.encoder.type_substitution_polymorphic_type_map(self.tymap).with_span(self.mir.span)?;
 
         let formal_args: Vec<_> = self
             .mir
@@ -48,9 +56,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> StubFunctionEncoder<'p, 'v, 'tcx> {
             .map(|local| {
                 let var_name = self.mir_encoder.encode_local_var_name(local);
                 let mir_type = self.mir_encoder.get_local_ty(local);
-                self.encoder.encode_snapshot_type(mir_type)
+                self.encoder.encode_snapshot_type(mir_type, self.tymap)
                     .map(|var_type| {
-                        let var_type = var_type.patch(&subst_strings);
+                        let var_type = var_type.patch(substs);
                         vir::LocalVar::new(var_name, var_type)
                     })
             })
@@ -78,16 +86,15 @@ impl<'p, 'v: 'p, 'tcx: 'v> StubFunctionEncoder<'p, 'v, 'tcx> {
     }
 
     pub fn encode_function_name(&self) -> String {
-        let mut base_name = self.encoder.encode_item_name(self.proc_def_id);
-        base_name.push_str("_stub");
-
-        base_name
+        // TODO: It would be nice to somehow mark that this function is a stub
+        // in the encoding.
+        self.encoder.encode_item_name(self.proc_def_id)
     }
 
     pub fn encode_function_return_type(&self) -> SpannedEncodingResult<vir::Type> {
         let ty = self.mir.return_ty();
         let return_local = mir::Place::return_place().as_local().unwrap();
         let span = self.mir_encoder.get_local_span(return_local);
-        self.encoder.encode_snapshot_type(ty).with_span(span)
+        self.encoder.encode_snapshot_type(ty, self.tymap).with_span(span)
     }
 }

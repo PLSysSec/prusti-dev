@@ -1,4 +1,4 @@
-// © 2020, ETH Zurich
+// © 2021, ETH Zurich
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,18 +7,20 @@
 #![feature(rustc_private)]
 #![feature(box_patterns)]
 
-extern crate rustc_middle;
 extern crate rustc_data_structures;
+extern crate rustc_index;
+extern crate rustc_middle;
+extern crate rustc_span;
 extern crate serde;
 
-mod pointwise_state;
 mod abstract_state;
+mod analysis;
 mod analysis_error;
-mod analyzer;
-pub mod abstract_domains;
+pub mod domains;
+mod pointwise_state;
 mod serialization_utils;
 
-pub use pointwise_state::PointwiseState;
+pub use crate::analysis::Analysis;
 pub use abstract_state::AbstractState;
 pub use analysis_error::AnalysisError;
-pub use analyzer::Analyzer;
+pub use pointwise_state::PointwiseState;

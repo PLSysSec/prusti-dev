@@ -20,6 +20,38 @@ import shutil
 verbose = False
 dry_run = False
 
+RUSTFMT_CRATES = [
+    'analysis',
+    'prusti',
+    #'prusti-common',
+    #'prusti-contracts',
+    'prusti-contracts-impl',
+    'prusti-contracts-internal',
+    'prusti-contracts-test',
+    #'prusti-interface',
+    'prusti-launch',
+    'prusti-server',
+    #'prusti-specs',
+    'prusti-tests',
+    'prusti-utils',
+    #'prusti-viper',
+    'viper',
+    'viper-sys',
+    'vir',
+    'vir-gen',
+]
+
+RUSTFMT_PATHS = [
+    'prusti-tests/tests/verify_partial/**/*.rs',
+    'prusti-viper/src/encoder/foldunfold/mod.rs',
+    'prusti-viper/src/encoder/mir/mod.rs',
+    'prusti-viper/src/encoder/high/mod.rs',
+    'prusti-viper/src/encoder/snapshot/mod.rs',
+    'prusti-viper/src/encoder/definition_collector.rs',
+    'vir/defs/high/mod.rs',
+    'vir/defs/polymorphic/mod.rs',
+    'vir/defs/components/mod.rs',
+]
 
 def default_linux_java_loc():
     if os.path.exists('/usr/lib/jvm/default-java'):
@@ -169,11 +201,11 @@ def get_env():
     return env
 
 
-def run_command(args, env=None):
+def run_command(args, env=None, cwd=None):
     """Run a command with the given arguments."""
     if env is None:
         env = get_env()
-    completed = subprocess.run(args, env=env)
+    completed = subprocess.run(args, env=env, cwd=cwd)
     if completed.returncode != 0:
         sys.exit(completed.returncode)
 
@@ -433,6 +465,33 @@ def verify_test(args):
     report("env: PRUSTI_CHECK_OVERFLOWS={}", env['PRUSTI_CHECK_OVERFLOWS'])
     run_command([prusti_path, '--edition=2018', test_path] + compile_flags, env)
 
+def clippy_in(cwd):
+    """Run cargo clippy in given subproject."""
+    run_command(['cargo', 'clippy', '--', '-D', 'warnings'], cwd=cwd)
+
+def fmt_in(cwd):
+    """Run cargo fmt in given subproject."""
+    run_command(['cargo', 'fmt'], cwd=cwd)
+
+def fmt_all():
+    """Run rustfmt on all formatted files."""
+    for crate in RUSTFMT_CRATES:
+        fmt_in(crate)
+    for path in RUSTFMT_PATHS:
+        for file in glob.glob(path, recursive=True):
+            run_command(['rustfmt', file])
+
+def fmt_check_in(cwd):
+    """Run cargo fmt check in the given subproject."""
+    run_command(['cargo', 'fmt', '--', '--check'], cwd=cwd)
+
+def fmt_check_all():
+    """Run rustfmt check on all formatted files."""
+    for crate in RUSTFMT_CRATES:
+        fmt_check_in(crate)
+    for path in RUSTFMT_PATHS:
+        for file in glob.glob(path, recursive=True):
+            run_command(['rustfmt', '--check', file])
 
 def main(argv):
     global verbose
@@ -457,6 +516,21 @@ def main(argv):
             break
         elif arg == 'exec':
             run_command(argv[i+1:])
+            break
+        elif arg == 'clippy-in':
+            clippy_in(*argv[i+1:])
+            break
+        elif arg == 'fmt-check':
+            fmt_check_in(*argv[i+1:])
+            break
+        elif arg == 'fmt-check-all':
+            fmt_check_all(*argv[i+1:])
+            break
+        elif arg == 'fmt':
+            fmt_in(*argv[i+1:])
+            break
+        elif arg == 'fmt-all':
+            fmt_all(*argv[i+1:])
             break
         else:
             cargo(argv[i:])

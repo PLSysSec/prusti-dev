@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         prusti_home: guest_prusti_home.to_path_buf(),
         viper_home: guest_viper_home.to_path_buf(),
         z3_exe: guest_z3_home.to_path_buf(),
-        java_home: Some(guest_java_home.to_path_buf()),
+        java_home: Some(guest_java_home.clone()),
     };
 
     info!("Crate a new workspace...");
@@ -158,13 +158,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     info!("Read lists of crates...");
     // TODO: do something to freeze the version of the dependencies.
     let crates_list: Vec<Crate> =
-        csv::Reader::from_reader(fs::File::open("test-crates/crates.csv")?)
+        csv::Reader::from_reader(fs::File::open("test-crates/successful_crates.csv")?)
             .deserialize()
             .collect::<Result<Vec<CrateRecord>, _>>()?
             .into_iter()
             .map(|c| c.into())
-            // For the moment, test only a few of the crates.
-            .take(2)
             .collect();
 
     // List of crates that don't compile with the standard compiler.
@@ -192,7 +190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut storage = LogStorage::new(LevelFilter::Info);
             storage.set_max_size(1024 * 1024);
 
-            let build_status = build_dir.build(&toolchain, &krate, sandbox).run(|build| {
+            let build_status = build_dir.build(&toolchain, krate, sandbox).run(|build| {
                 logging::capture(&storage, || {
                     build.cargo().args(&["check"]).run()?;
                     Ok(())
@@ -217,16 +215,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .memory_limit(Some(4024 * 1024 * 1024))
                 .enable_networking(false)
                 .mount(
-                    &host_prusti_home,
-                    &guest_prusti_home,
+                    host_prusti_home,
+                    guest_prusti_home,
                     cmd::MountKind::ReadOnly,
                 )
                 .mount(
-                    &host_viper_home,
-                    &guest_viper_home,
+                    host_viper_home,
+                    guest_viper_home,
                     cmd::MountKind::ReadOnly,
                 )
-                .mount(&host_z3_home, &guest_z3_home, cmd::MountKind::ReadOnly)
+                .mount(host_z3_home, guest_z3_home, cmd::MountKind::ReadOnly)
                 .mount(&host_java_home, &guest_java_home, cmd::MountKind::ReadOnly);
             for java_policy_path in &host_java_policies {
                 sandbox =
@@ -236,13 +234,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut storage = LogStorage::new(LevelFilter::Info);
             storage.set_max_size(1024 * 1024);
 
-            let verification_status = build_dir.build(&toolchain, &krate, sandbox).run(|build| {
+            let verification_status = build_dir.build(&toolchain, krate, sandbox).run(|build| {
                 logging::capture(&storage, || {
                     build
                         .cmd(&cargo_prusti)
                         .env("RUST_BACKTRACE", "1")
                         .env("PRUSTI_ASSERT_TIMEOUT", "60000")
                         .env("PRUSTI_CHECK_PANICS", "false")
+                        .env("PRUSTI_CHECK_OVERFLOWS", "false")
                         // Do not report errors for unsupported language features
                         .env("PRUSTI_SKIP_UNSUPPORTED_FEATURES", "true")
                         .env("PRUSTI_LOG_DIR", "/tmp/prusti_log")
@@ -284,9 +283,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Panic
-    if !failed_crates.is_empty() {
-        panic!("Failed to verify {} crates", failed_crates.len());
-    }
+    assert!(failed_crates.is_empty(), "Failed to verify {} crates", failed_crates.len());
 
     Ok(())
 }

@@ -624,7 +624,7 @@ impl Generic for Unfold {
 impl Generic for Obtain {
     fn substitute(self, map: &HashMap<TypeVar, Type>) -> Self {
         let mut obtain = self;
-        obtain.predicate_name = obtain.predicate_name.substitute(map);
+        obtain.expr = obtain.expr.substitute(map);
         obtain
     }
 }
@@ -811,10 +811,7 @@ impl Generic for Node {
             .into_iter()
             .map(|alive_conflicting_borrow| alive_conflicting_borrow.substitute(map))
             .collect();
-        node.place = match node.place {
-            Some(expr) => Some(expr.substitute(map)),
-            _ => None,
-        };
+        node.place = node.place.map(|expr| expr.substitute(map));
         node
     }
 }
@@ -889,26 +886,20 @@ mod tests {
             let mut m = HashMap::new();
             m.insert(TypeVar { label: String::from("T") }, Type::Int);
             m.insert(TypeVar { label: String::from("E") }, Type::Bool);
-            m.insert(TypeVar { label: String::from("F") }, Type::TypedRef(TypedRef {
-                label: String::from("SimpleRef"),
-                arguments: vec![],
-            }));
+            m.insert(TypeVar { label: String::from("F") }, Type::typed_ref("SimpleRef"));
             // Substitution into other type vars that have a mapping
-            m.insert(TypeVar { label: String::from("G") }, Type::TypedRef(TypedRef {
-                label: String::from("ComplexRef"),
-                arguments: vec![Type::TypeVar(TypeVar {label: String::from("T") })],
-            }));
+            m.insert(TypeVar { label: String::from("G") }, Type::typed_ref_with_args("ComplexRef", vec![Type::type_var("T")]));
             // Subsitutition into the same type vars used for substitution
-            m.insert(TypeVar { label: String::from("H") }, Type::TypedRef(TypedRef {
-                label: String::from("ComplexRef2"),
-                arguments: vec![
-                    Type::TypeVar(TypeVar {label: String::from("H") }),
-                    Type::Domain(DomainType {
-                        label: String::from("ComplexDomain"),
-                        arguments: vec![Type::TypeVar(TypeVar {label: String::from("T")})],
-                    })
+            m.insert(TypeVar { label: String::from("H") }, Type::typed_ref_with_args(
+                "ComplexRef2",
+                vec![
+                    Type::type_var("H"),
+                    Type::domain_with_args(
+                        "ComplexDomain",
+                        vec![Type::type_var("T")],
+                    )
                 ],
-            }));
+            ));
             m
         };
     }
@@ -935,36 +926,25 @@ mod tests {
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![Type::Int],
-        });
+        source = Type::typed_ref_with_args("CustomStruct", vec![Type::Int]);
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::Domain(DomainType {
-            label: String::from("CustomDomain"),
-            arguments: vec![],
-        });
+        source = Type::domain("CustomDomain");
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::Snapshot(SnapshotType {
-            label: String::from("CustomSnapshot"),
-            arguments: vec![
+        source = Type::snapshot_with_args(
+            "CustomSnapshot",
+            vec![
                 Type::Bool,
-                Type::TypedRef(TypedRef {
-                    label: String::from("vec"),
-                    arguments: vec![Type::Bool],
-                }),
+                Type::typed_ref_with_args("vec", vec![Type::Bool]),
             ],
-        });
+        );
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::TypeVar(TypeVar {
-            label: String::from("CustomTypeVar"),
-        });
+        source = Type::type_var("CustomTypeVar");
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
     }
@@ -972,42 +952,24 @@ mod tests {
     #[test]
     // source having no matching type var for substitution
     fn substitution_no_matching_type_var_test() {
-        let mut source = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![Type::TypeVar(TypeVar {
-                label: String::from("D"),
-            })],
-        });
+        let mut source = Type::typed_ref_with_args("CustomStruct", vec![Type::type_var("D")]);
         let mut expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::Domain(DomainType {
-            label: String::from("CustomDomain"),
-            arguments: vec![
-                Type::TypeVar(TypeVar {
-                    label: String::from("C"),
-                }),
-                Type::Int,
-                Type::TypeVar(TypeVar {
-                    label: String::from("D"),
-                }),
-            ],
-        });
+        source = Type::domain_with_args(
+            "CustomDomain",
+            vec![Type::type_var("C"), Type::Int, Type::type_var("D")],
+        );
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::Snapshot(SnapshotType {
-            label: String::from("Custom"),
-            arguments: vec![
+        source = Type::snapshot_with_args(
+            "Custom",
+            vec![
                 Type::Bool,
-                Type::TypedRef(TypedRef {
-                    label: String::from("vec"),
-                    arguments: vec![Type::TypeVar(TypeVar {
-                        label: String::from("D"),
-                    })],
-                }),
+                Type::typed_ref_with_args("vec", vec![Type::type_var("D")]),
             ],
-        });
+        );
         expected = source.clone();
         test(source, expected, &SUBSTITUTION_MAP);
     }
@@ -1015,79 +977,38 @@ mod tests {
     #[test]
     // successful substitution simple case
     fn substitution_type_var_simple_test() {
-        let mut source = Type::TypeVar(TypeVar {
-            label: String::from("T"),
-        });
+        let mut source = Type::type_var("T");
         let mut expected = Type::Int;
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![
-                Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
-                Type::TypeVar(TypeVar {
-                    label: String::from("F"),
-                }),
-            ],
-        });
-        expected = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![
-                Type::Bool,
-                Type::TypedRef(TypedRef {
-                    label: String::from("SimpleRef"),
-                    arguments: vec![],
-                }),
-            ],
-        });
+        source = Type::typed_ref_with_args(
+            "CustomStruct",
+            vec![Type::type_var("E"), Type::type_var("F")],
+        );
+        expected = Type::typed_ref_with_args(
+            "CustomStruct",
+            vec![Type::Bool, Type::typed_ref("SimpleRef")],
+        );
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::Domain(DomainType {
-            label: String::from("CustomDomain"),
-            arguments: vec![
-                Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
-                Type::TypeVar(TypeVar {
-                    label: String::from("F"),
-                }),
-            ],
-        });
-        expected = Type::Domain(DomainType {
-            label: String::from("CustomDomain"),
-            arguments: vec![
-                Type::Bool,
-                Type::TypedRef(TypedRef {
-                    label: String::from("SimpleRef"),
-                    arguments: vec![],
-                }),
-            ],
-        });
+        source = Type::domain_with_args(
+            "CustomDomain",
+            vec![Type::type_var("E"), Type::type_var("F")],
+        );
+        expected = Type::domain_with_args(
+            "CustomDomain",
+            vec![Type::Bool, Type::typed_ref("SimpleRef")],
+        );
         test(source, expected, &SUBSTITUTION_MAP);
 
-        source = Type::Snapshot(SnapshotType {
-            label: String::from("CustomSnapshot"),
-            arguments: vec![
-                Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
-                Type::TypeVar(TypeVar {
-                    label: String::from("F"),
-                }),
-            ],
-        });
-        expected = Type::Snapshot(SnapshotType {
-            label: String::from("CustomSnapshot"),
-            arguments: vec![
-                Type::Bool,
-                Type::TypedRef(TypedRef {
-                    label: String::from("SimpleRef"),
-                    arguments: vec![],
-                }),
-            ],
-        });
+        source = Type::snapshot_with_args(
+            "CustomSnapshot",
+            vec![Type::type_var("E"), Type::type_var("F")],
+        );
+        expected = Type::snapshot_with_args(
+            "CustomSnapshot",
+            vec![Type::Bool, Type::typed_ref("SimpleRef")],
+        );
         test(source, expected, &SUBSTITUTION_MAP);
     }
 
@@ -1095,107 +1016,73 @@ mod tests {
     // successful substitution more complex case
     fn substitution_type_var_complex_test() {
         // more nested structure
-        let source = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![
+        let source = Type::typed_ref_with_args(
+            "CustomStruct",
+            vec![
                 Type::Int,
-                Type::Domain(DomainType {
-                    label: String::from("CustomDomain"),
-                    arguments: vec![
-                        Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
-                        Type::Snapshot(SnapshotType {
-                            label: String::from("CustomSnapshot"),
-                            arguments: vec![Type::TypeVar(TypeVar {
-                                label: String::from("F"),
-                            })],
-                        }),
+                Type::domain_with_args(
+                    "CustomDomain",
+                    vec![
+                        Type::type_var("E"),
+                        Type::snapshot_with_args("CustomSnapshot", vec![Type::type_var("F")]),
                     ],
-                }),
+                ),
             ],
-        });
-        let expected = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![
+        );
+        let expected = Type::typed_ref_with_args(
+            "CustomStruct",
+            vec![
                 Type::Int,
-                Type::Domain(DomainType {
-                    label: String::from("CustomDomain"),
-                    arguments: vec![
+                Type::domain_with_args(
+                    "CustomDomain",
+                    vec![
                         Type::Bool,
-                        Type::Snapshot(SnapshotType {
-                            label: String::from("CustomSnapshot"),
-                            arguments: vec![Type::TypedRef(TypedRef {
-                                label: String::from("SimpleRef"),
-                                arguments: vec![],
-                            })],
-                        }),
+                        Type::snapshot_with_args(
+                            "CustomSnapshot",
+                            vec![Type::typed_ref("SimpleRef")],
+                        ),
                     ],
-                }),
+                ),
             ],
-        });
+        );
         test(source, expected, &SUBSTITUTION_MAP);
 
         // structures having type vars after substitution
-        let source = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![
-                Type::TypeVar(TypeVar {
-                    label: String::from("G"),
-                }),
-                Type::Domain(DomainType {
-                    label: String::from("CustomDomain"),
-                    arguments: vec![
-                        Type::TypeVar(TypeVar {
-                            label: String::from("H"),
-                        }),
-                        Type::Snapshot(SnapshotType {
-                            label: String::from("CustomSnapshot"),
-                            arguments: vec![Type::TypeVar(TypeVar {
-                                label: String::from("F"),
-                            })],
-                        }),
+        let source = Type::typed_ref_with_args(
+            "CustomStruct",
+            vec![
+                Type::type_var("G"),
+                Type::domain_with_args(
+                    "CustomDomain",
+                    vec![
+                        Type::type_var("H"),
+                        Type::snapshot_with_args("CustomSnapshot", vec![Type::type_var("F")]),
                     ],
-                }),
+                ),
             ],
-        });
-        let expected = Type::TypedRef(TypedRef {
-            label: String::from("CustomStruct"),
-            arguments: vec![
-                Type::TypedRef(TypedRef {
-                    label: String::from("ComplexRef"),
-                    arguments: vec![Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    })],
-                }),
-                Type::Domain(DomainType {
-                    label: String::from("CustomDomain"),
-                    arguments: vec![
-                        Type::TypedRef(TypedRef {
-                            label: String::from("ComplexRef2"),
-                            arguments: vec![
-                                Type::TypeVar(TypeVar {
-                                    label: String::from("H"),
-                                }),
-                                Type::Domain(DomainType {
-                                    label: String::from("ComplexDomain"),
-                                    arguments: vec![Type::TypeVar(TypeVar {
-                                        label: String::from("T"),
-                                    })],
-                                }),
+        );
+        let expected = Type::typed_ref_with_args(
+            "CustomStruct",
+            vec![
+                Type::typed_ref_with_args("ComplexRef", vec![Type::type_var("T")]),
+                Type::domain_with_args(
+                    "CustomDomain",
+                    vec![
+                        Type::typed_ref_with_args(
+                            "ComplexRef2",
+                            vec![
+                                Type::type_var("H"),
+                                Type::domain_with_args("ComplexDomain", vec![Type::type_var("T")]),
                             ],
-                        }),
-                        Type::Snapshot(SnapshotType {
-                            label: String::from("CustomSnapshot"),
-                            arguments: vec![Type::TypedRef(TypedRef {
-                                label: String::from("SimpleRef"),
-                                arguments: vec![],
-                            })],
-                        }),
+                        ),
+                        Type::snapshot_with_args(
+                            "CustomSnapshot",
+                            vec![Type::typed_ref("SimpleRef")],
+                        ),
                     ],
-                }),
+                ),
             ],
-        });
+        );
         test(source, expected, &SUBSTITUTION_MAP);
     }
 
@@ -1204,9 +1091,7 @@ mod tests {
     fn substitution_type_var_local_var_test() {
         let source = LocalVar {
             name: String::from("_v1"),
-            typ: Type::TypeVar(TypeVar {
-                label: String::from("T"),
-            }),
+            typ: Type::type_var("T"),
         };
         let expected = LocalVar {
             name: String::from("_v1"),
@@ -1220,9 +1105,7 @@ mod tests {
     fn substitution_type_var_field_test() {
         let source = Field {
             name: String::from("_f1"),
-            typ: Type::TypeVar(TypeVar {
-                label: String::from("T"),
-            }),
+            typ: Type::type_var("T"),
         };
         let expected = Field {
             name: String::from("_f1"),
@@ -1241,18 +1124,16 @@ mod tests {
         let mut source = Expr::Local(Local {
             variable: LocalVar {
                 name: String::from("_v1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
-            position: position.clone(),
+            position,
         });
         let mut expected = Expr::Local(Local {
             variable: LocalVar {
                 name: String::from("_v1"),
                 typ: Type::Int,
             },
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1261,19 +1142,15 @@ mod tests {
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             variant_index: Field {
                 name: String::from("_f1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
-            position: position.clone(),
+            position,
         });
         expected = Expr::Variant(Variant {
             base: Box::new(Expr::Local(Local {
@@ -1281,13 +1158,13 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             variant_index: Field {
                 name: String::from("_f1"),
                 typ: Type::Int,
             },
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1296,19 +1173,15 @@ mod tests {
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             field: Field {
                 name: String::from("_f1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
-            position: position.clone(),
+            position,
         });
         expected = Expr::Field(FieldExpr {
             base: Box::new(Expr::Local(Local {
@@ -1316,13 +1189,13 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             field: Field {
                 name: String::from("_f1"),
                 typ: Type::Int,
             },
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1331,16 +1204,12 @@ mod tests {
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            addr_type: Type::TypeVar(TypeVar {
-                label: String::from("E"),
-            }),
-            position: position.clone(),
+            addr_type: Type::type_var("E"),
+            position,
         });
         expected = Expr::AddrOf(AddrOf {
             base: Box::new(Expr::Local(Local {
@@ -1348,10 +1217,10 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             addr_type: Type::Bool,
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1361,13 +1230,11 @@ mod tests {
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::LabelledOld(LabelledOld {
             label: String::from("l1"),
@@ -1376,20 +1243,20 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
         // Const
         source = Expr::Const(ConstExpr {
             value: Const::Int(123),
-            position: position.clone(),
+            position,
         });
         expected = Expr::Const(ConstExpr {
             value: Const::Int(123),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1398,23 +1265,19 @@ mod tests {
             left: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_left"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             right: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_right"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
             borrow: Some(Borrow(123)),
-            position: position.clone(),
+            position,
         });
         expected = Expr::MagicWand(MagicWand {
             left: Box::new(Expr::Local(Local {
@@ -1422,46 +1285,44 @@ mod tests {
                     name: String::from("_left"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             right: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_right"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
             borrow: Some(Borrow(123)),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
         // PredicateAccessPredicate
         source = Expr::PredicateAccessPredicate(PredicateAccessPredicate {
-            predicate_name: String::from("_p1"),
+            predicate_type: Type::typed_ref("_p1"),
             argument: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             permission: PermAmount::Read,
-            position: position.clone(),
+            position,
         });
         expected = Expr::PredicateAccessPredicate(PredicateAccessPredicate {
-            predicate_name: String::from("_p1"),
+            predicate_type: Type::typed_ref("_p1"),
             argument: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             permission: PermAmount::Read,
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1470,14 +1331,12 @@ mod tests {
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             permission: PermAmount::Read,
-            position: position.clone(),
+            position,
         });
         expected = Expr::FieldAccessPredicate(FieldAccessPredicate {
             base: Box::new(Expr::Local(Local {
@@ -1485,10 +1344,10 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             permission: PermAmount::Read,
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1498,13 +1357,11 @@ mod tests {
             argument: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::UnaryOp(UnaryOp {
             op_kind: UnaryOpKind::Minus,
@@ -1513,9 +1370,9 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1525,22 +1382,18 @@ mod tests {
             left: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             right: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::BinOp(BinOp {
             op_kind: BinOpKind::Mul,
@@ -1549,16 +1402,16 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             right: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1568,22 +1421,18 @@ mod tests {
             left: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             right: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::ContainerOp(ContainerOp {
             op_kind: ContainerOpKind::SeqConcat,
@@ -1592,45 +1441,39 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             right: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
         // Seq
         source = Expr::Seq(Seq {
-            typ: Type::TypeVar(TypeVar {
-                label: String::from("T"),
-            }),
+            typ: Type::type_var("T"),
             elements: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v1"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
-            position: position.clone(),
+            position,
         });
         expected = Expr::Seq(Seq {
             typ: Type::Int,
@@ -1640,72 +1483,66 @@ mod tests {
                         name: String::from("_v1"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
         // Unfolding
         source = Expr::Unfolding(Unfolding {
-            predicate_name: String::from("p1"),
+            predicate: Type::typed_ref("p1"),
             arguments: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v1"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v3"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             permission: PermAmount::Write,
             variant: Some(EnumVariantIndex::new(String::from("evi"))),
-            position: position.clone(),
+            position,
         });
         expected = Expr::Unfolding(Unfolding {
-            predicate_name: String::from("p1"),
+            predicate: Type::typed_ref("p1"),
             arguments: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v1"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             base: Box::new(Expr::Local(Local {
@@ -1713,11 +1550,11 @@ mod tests {
                     name: String::from("_v3"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             permission: PermAmount::Write,
             variant: Some(EnumVariantIndex::new(String::from("evi"))),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1726,31 +1563,25 @@ mod tests {
             guard: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             then_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
             else_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v3"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::Cond(Cond {
             guard: Box::new(Expr::Local(Local {
@@ -1758,23 +1589,23 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             then_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
             else_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v3"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1783,47 +1614,37 @@ mod tests {
             variables: vec![
                 LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
             ],
             triggers: vec![Trigger::new(vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ])],
             body: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v5"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::ForAll(ForAll {
             variables: vec![
@@ -1842,14 +1663,14 @@ mod tests {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ])],
             body: Box::new(Expr::Local(Local {
@@ -1857,9 +1678,9 @@ mod tests {
                     name: String::from("_v5"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1868,47 +1689,37 @@ mod tests {
             variables: vec![
                 LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
             ],
             triggers: vec![Trigger::new(vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ])],
             body: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v5"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::Exists(Exists {
             variables: vec![
@@ -1927,14 +1738,14 @@ mod tests {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ])],
             body: Box::new(Expr::Local(Local {
@@ -1942,9 +1753,9 @@ mod tests {
                     name: String::from("_v5"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -1952,29 +1763,23 @@ mod tests {
         source = Expr::LetExpr(LetExpr {
             variable: LocalVar {
                 name: String::from("_v1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
             def: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
             body: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v3"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::LetExpr(LetExpr {
             variable: LocalVar {
@@ -1986,16 +1791,16 @@ mod tests {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
             body: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v3"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2006,40 +1811,30 @@ mod tests {
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             formal_arguments: vec![
                 LocalVar {
                     name: String::from("_v4"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
                 LocalVar {
                     name: String::from("_v5"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
             ],
-            return_type: Type::TypeVar(TypeVar {
-                label: String::from("E"),
-            }),
-            position: position.clone(),
+            return_type: Type::type_var("E"),
+            position,
         });
         expected = Expr::FuncApp(FuncApp {
             function_name: String::from("f1"),
@@ -2049,14 +1844,14 @@ mod tests {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             formal_arguments: vec![
@@ -2070,7 +1865,7 @@ mod tests {
                 },
             ],
             return_type: Type::Bool,
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2081,20 +1876,14 @@ mod tests {
                 formal_args: vec![
                     LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
                     LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
                 ],
-                return_type: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                return_type: Type::type_var("T"),
                 unique: false,
                 domain_name: String::from("dn1"),
             },
@@ -2102,23 +1891,19 @@ mod tests {
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
-            position: position.clone(),
+            position,
         });
         expected = Expr::DomainFuncApp(DomainFuncApp {
             domain_function: DomainFunc {
@@ -2143,17 +1928,17 @@ mod tests {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2162,22 +1947,18 @@ mod tests {
             inhale_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             exhale_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         expected = Expr::InhaleExhale(InhaleExhale {
             inhale_expr: Box::new(Expr::Local(Local {
@@ -2185,16 +1966,16 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             exhale_expr: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2203,26 +1984,20 @@ mod tests {
             base: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
             enum_place: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
             field: Field {
                 name: String::from("f1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
+                typ: Type::type_var("E"),
             },
         });
         expected = Expr::Downcast(DowncastExpr {
@@ -2231,14 +2006,14 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
             enum_place: Box::new(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
             field: Field {
                 name: String::from("f1"),
@@ -2277,11 +2052,9 @@ mod tests {
             expr: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
         });
         expected = Stmt::Inhale(Inhale {
@@ -2290,7 +2063,7 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
         });
         test(source, expected, &SUBSTITUTION_MAP);
@@ -2300,13 +2073,11 @@ mod tests {
             expr: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         expected = Stmt::Exhale(Exhale {
             expr: Expr::Local(Local {
@@ -2314,9 +2085,9 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2325,13 +2096,11 @@ mod tests {
             expr: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         expected = Stmt::Assert(Assert {
             expr: Expr::Local(Local {
@@ -2339,9 +2108,9 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2352,34 +2121,26 @@ mod tests {
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             targets: vec![
                 LocalVar {
                     name: String::from("_v4"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
                 LocalVar {
                     name: String::from("_v5"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
             ],
         });
@@ -2391,14 +2152,14 @@ mod tests {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             targets: vec![
@@ -2419,20 +2180,16 @@ mod tests {
             target: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             }),
             source: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             kind: AssignKind::SharedBorrow(Borrow(123)),
         });
@@ -2442,14 +2199,14 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             }),
             source: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             kind: AssignKind::SharedBorrow(Borrow(123)),
         });
@@ -2457,97 +2214,89 @@ mod tests {
 
         // Fold
         source = Stmt::Fold(Fold {
-            predicate_name: String::from("p1"),
+            predicate: Type::typed_ref("p1"),
             arguments: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             permission: PermAmount::Write,
             enum_variant: Some(EnumVariantIndex::new(String::from("evi"))),
-            position: position.clone(),
+            position,
         });
         expected = Stmt::Fold(Fold {
-            predicate_name: String::from("p1"),
+            predicate: Type::typed_ref("p1"),
             arguments: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             permission: PermAmount::Write,
             enum_variant: Some(EnumVariantIndex::new(String::from("evi"))),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
         // Unfold
         source = Stmt::Unfold(Unfold {
-            predicate_name: String::from("p1"),
+            predicate: Type::typed_ref("p1"),
             arguments: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             permission: PermAmount::Write,
             enum_variant: Some(EnumVariantIndex::new(String::from("evi"))),
         });
         expected = Stmt::Unfold(Unfold {
-            predicate_name: String::from("p1"),
+            predicate: Type::typed_ref("p1"),
             arguments: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v2"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             permission: PermAmount::Write,
@@ -2557,26 +2306,24 @@ mod tests {
 
         // Obtain
         source = Stmt::Obtain(Obtain {
-            predicate_name: Expr::Local(Local {
+            expr: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         expected = Stmt::Obtain(Obtain {
-            predicate_name: Expr::Local(Local {
+            expr: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2595,20 +2342,16 @@ mod tests {
             left: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             right: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             }),
             unchecked: true,
         });
@@ -2618,14 +2361,14 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             right: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             }),
             unchecked: true,
         });
@@ -2636,53 +2379,43 @@ mod tests {
             magic_wand: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             package_stmts: vec![
                 Stmt::Inhale(Inhale {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 }),
                 Stmt::Exhale(Exhale {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v3"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             label: String::from("l1"),
             variables: vec![
                 LocalVar {
                     name: String::from("_v4"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
                 LocalVar {
                     name: String::from("_v5"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
             ],
-            position: position.clone(),
+            position,
         });
         expected = Stmt::PackageMagicWand(PackageMagicWand {
             magic_wand: Expr::Local(Local {
@@ -2690,7 +2423,7 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             package_stmts: vec![
                 Stmt::Inhale(Inhale {
@@ -2699,7 +2432,7 @@ mod tests {
                             name: String::from("_v2"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 }),
                 Stmt::Exhale(Exhale {
@@ -2708,9 +2441,9 @@ mod tests {
                             name: String::from("_v3"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             label: String::from("l1"),
@@ -2724,7 +2457,7 @@ mod tests {
                     typ: Type::Bool,
                 },
             ],
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2733,13 +2466,11 @@ mod tests {
             magic_wand: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         expected = Stmt::ApplyMagicWand(ApplyMagicWand {
             magic_wand: Expr::Local(Local {
@@ -2747,9 +2478,9 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
-            position: position.clone(),
+            position,
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
@@ -2761,59 +2492,49 @@ mod tests {
                     guard: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v1"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     borrow: Borrow(123),
                     reborrowing_nodes: vec![Borrow(1), Borrow(2)],
                     reborrowed_nodes: vec![Borrow(1), Borrow(2)],
                     stmts: vec![
                         Stmt::Obtain(Obtain {
-                            predicate_name: Expr::Local(Local {
+                            expr: Expr::Local(Local {
                                 variable: LocalVar {
                                     name: String::from("_v2"),
-                                    typ: Type::TypeVar(TypeVar {
-                                        label: String::from("T"),
-                                    }),
+                                    typ: Type::type_var("T"),
                                 },
-                                position: position.clone(),
+                                position,
                             }),
-                            position: position.clone(),
+                            position,
                         }),
                         Stmt::Obtain(Obtain {
-                            predicate_name: Expr::Local(Local {
+                            expr: Expr::Local(Local {
                                 variable: LocalVar {
                                     name: String::from("_v3"),
-                                    typ: Type::TypeVar(TypeVar {
-                                        label: String::from("E"),
-                                    }),
+                                    typ: Type::type_var("E"),
                                 },
-                                position: position.clone(),
+                                position,
                             }),
-                            position: position.clone(),
+                            position,
                         }),
                     ],
                     borrowed_places: vec![
                         Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v4"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
                         Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v5"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("E"),
-                                }),
+                                typ: Type::type_var("E"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
                     ],
                     conflicting_borrows: vec![Borrow(403), Borrow(404)],
@@ -2821,31 +2542,25 @@ mod tests {
                     place: Some(Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v6"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     })),
                 }],
                 borrowed_places: vec![
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v7"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v8"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 ],
             },
@@ -2859,31 +2574,31 @@ mod tests {
                             name: String::from("_v1"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     borrow: Borrow(123),
                     reborrowing_nodes: vec![Borrow(1), Borrow(2)],
                     reborrowed_nodes: vec![Borrow(1), Borrow(2)],
                     stmts: vec![
                         Stmt::Obtain(Obtain {
-                            predicate_name: Expr::Local(Local {
+                            expr: Expr::Local(Local {
                                 variable: LocalVar {
                                     name: String::from("_v2"),
                                     typ: Type::Int,
                                 },
-                                position: position.clone(),
+                                position,
                             }),
-                            position: position.clone(),
+                            position,
                         }),
                         Stmt::Obtain(Obtain {
-                            predicate_name: Expr::Local(Local {
+                            expr: Expr::Local(Local {
                                 variable: LocalVar {
                                     name: String::from("_v3"),
                                     typ: Type::Bool,
                                 },
-                                position: position.clone(),
+                                position,
                             }),
-                            position: position.clone(),
+                            position,
                         }),
                     ],
                     borrowed_places: vec![
@@ -2892,14 +2607,14 @@ mod tests {
                                 name: String::from("_v4"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         }),
                         Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v5"),
                                 typ: Type::Bool,
                             },
-                            position: position.clone(),
+                            position,
                         }),
                     ],
                     conflicting_borrows: vec![Borrow(403), Borrow(404)],
@@ -2909,7 +2624,7 @@ mod tests {
                             name: String::from("_v6"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     })),
                 }],
                 borrowed_places: vec![
@@ -2918,14 +2633,14 @@ mod tests {
                             name: String::from("_v7"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v8"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 ],
             },
@@ -2937,35 +2652,29 @@ mod tests {
             guard: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             then_stmts: vec![
                 Stmt::Inhale(Inhale {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 }),
                 Stmt::Exhale(Exhale {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v3"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             else_stmts: vec![
@@ -2973,24 +2682,20 @@ mod tests {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v4"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 }),
                 Stmt::Exhale(Exhale {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v5"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
         });
@@ -3000,7 +2705,7 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             then_stmts: vec![
                 Stmt::Inhale(Inhale {
@@ -3009,7 +2714,7 @@ mod tests {
                             name: String::from("_v2"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 }),
                 Stmt::Exhale(Exhale {
@@ -3018,9 +2723,9 @@ mod tests {
                             name: String::from("_v3"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             else_stmts: vec![
@@ -3030,7 +2735,7 @@ mod tests {
                             name: String::from("_v4"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 }),
                 Stmt::Exhale(Exhale {
@@ -3039,9 +2744,9 @@ mod tests {
                             name: String::from("_v5"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
         });
@@ -3054,7 +2759,7 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             field: Field {
                 name: String::from("f1"),
@@ -3067,7 +2772,7 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             field: Field {
                 name: String::from("f1"),
@@ -3085,30 +2790,19 @@ mod tests {
             formal_args: vec![
                 LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("D"),
-                    }),
+                    typ: Type::type_var("D"),
                 },
             ],
             formal_returns: vec![LocalVar {
                 name: String::from("_r"),
-                typ: Type::TypedRef(TypedRef {
-                    label: String::from("CustomStruct"),
-                    arguments: vec![
-                        Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
-                        Type::TypeVar(TypeVar {
-                            label: String::from("F"),
-                        }),
-                    ],
-                }),
+                typ: Type::typed_ref_with_args(
+                    "CustomStruct",
+                    vec![Type::type_var("E"), Type::type_var("F")],
+                ),
             }],
         };
 
@@ -3121,23 +2815,15 @@ mod tests {
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("D"),
-                    }),
+                    typ: Type::type_var("D"),
                 },
             ],
             formal_returns: vec![LocalVar {
                 name: String::from("_r"),
-                typ: Type::TypedRef(TypedRef {
-                    label: String::from("CustomStruct"),
-                    arguments: vec![
-                        Type::Bool,
-                        Type::TypedRef(TypedRef {
-                            label: String::from("SimpleRef"),
-                            arguments: vec![],
-                        }),
-                    ],
-                }),
+                typ: Type::typed_ref_with_args(
+                    "CustomStruct",
+                    vec![Type::Bool, Type::typed_ref("SimpleRef")],
+                ),
             }],
         };
         test(source, expected, &SUBSTITUTION_MAP);
@@ -3155,14 +2841,10 @@ mod tests {
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("D"),
-                    }),
+                    typ: Type::type_var("D"),
                 },
             ],
-            return_type: Type::TypeVar(TypeVar {
-                label: String::from("T"),
-            }),
+            return_type: Type::type_var("T"),
             unique: true,
             domain_name: String::from("dn"),
         };
@@ -3176,9 +2858,7 @@ mod tests {
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("D"),
-                    }),
+                    typ: Type::type_var("D"),
                 },
             ],
             return_type: Type::Int,
@@ -3199,11 +2879,9 @@ mod tests {
             expr: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             domain_name: String::from("dn"),
         };
@@ -3215,7 +2893,7 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             domain_name: String::from("dn"),
         };
@@ -3240,14 +2918,10 @@ mod tests {
                         },
                         LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("D"),
-                            }),
+                            typ: Type::type_var("D"),
                         },
                     ],
-                    return_type: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    return_type: Type::type_var("T"),
                     unique: true,
                     domain_name: String::from("dn1"),
                 },
@@ -3260,14 +2934,10 @@ mod tests {
                         },
                         LocalVar {
                             name: String::from("_v4"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("C"),
-                            }),
+                            typ: Type::type_var("C"),
                         },
                     ],
-                    return_type: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    return_type: Type::type_var("E"),
                     unique: true,
                     domain_name: String::from("dn2"),
                 },
@@ -3278,11 +2948,9 @@ mod tests {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v5"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     domain_name: String::from("dn3"),
                 },
@@ -3291,23 +2959,14 @@ mod tests {
                     expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v6"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     domain_name: String::from("dn4"),
                 },
             ],
-            type_vars: vec![
-                Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
-                Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
-            ],
+            type_vars: vec![Type::type_var("T"), Type::type_var("E")],
         };
 
         let expected = Domain {
@@ -3322,9 +2981,7 @@ mod tests {
                         },
                         LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("D"),
-                            }),
+                            typ: Type::type_var("D"),
                         },
                     ],
                     return_type: Type::Int,
@@ -3340,9 +2997,7 @@ mod tests {
                         },
                         LocalVar {
                             name: String::from("_v4"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("C"),
-                            }),
+                            typ: Type::type_var("C"),
                         },
                     ],
                     return_type: Type::Bool,
@@ -3358,7 +3013,7 @@ mod tests {
                             name: String::from("_v5"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     domain_name: String::from("dn3"),
                 },
@@ -3369,7 +3024,7 @@ mod tests {
                             name: String::from("_v6"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     domain_name: String::from("dn4"),
                 },
@@ -3397,23 +3052,21 @@ mod tests {
                     typ: Type::Bool,
                 },
             ],
-            return_type: Type::TypeVar(TypeVar {
-                label: String::from("T"),
-            }),
+            return_type: Type::type_var("T"),
             pres: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             posts: vec![
@@ -3422,14 +3075,14 @@ mod tests {
                         name: String::from("_v5"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v6"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             body: Some(Expr::Local(Local {
@@ -3437,7 +3090,7 @@ mod tests {
                     name: String::from("_v7"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
         };
 
@@ -3460,14 +3113,14 @@ mod tests {
                         name: String::from("_v3"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             posts: vec![
@@ -3476,14 +3129,14 @@ mod tests {
                         name: String::from("_v5"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v6"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             body: Some(Expr::Local(Local {
@@ -3491,7 +3144,7 @@ mod tests {
                     name: String::from("_v7"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
         };
         test(source, expected, &SUBSTITUTION_MAP);
@@ -3504,26 +3157,22 @@ mod tests {
         let position = Position::new(1, 2, 3);
 
         let source = StructPredicate {
-            name: String::from("sp1"),
+            typ: Type::typed_ref("sp1"),
             this: LocalVar {
                 name: String::from("_v1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
             body: Some(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v7"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             })),
         };
 
         let expected = StructPredicate {
-            name: String::from("sp1"),
+            typ: Type::typed_ref("sp1"),
             this: LocalVar {
                 name: String::from("_v1"),
                 typ: Type::Int,
@@ -3533,7 +3182,7 @@ mod tests {
                     name: String::from("_v7"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             })),
         };
         test(source, expected, &SUBSTITUTION_MAP);
@@ -3546,56 +3195,44 @@ mod tests {
         let position = Position::new(1, 2, 3);
 
         let source = EnumPredicate {
-            name: String::from("ep1"),
+            typ: Type::typed_ref("ep1"),
             this: LocalVar {
                 name: String::from("_v1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
             discriminant_field: Field {
                 name: String::from("f1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
+                typ: Type::type_var("E"),
             },
             discriminant_bounds: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             }),
             variants: vec![
                 (
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v3"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v4"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
                         body: Some(Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v5"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3603,29 +3240,23 @@ mod tests {
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v6"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v7"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
                         body: Some(Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v8"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3633,7 +3264,7 @@ mod tests {
         };
 
         let expected = EnumPredicate {
-            name: String::from("ep1"),
+            typ: Type::typed_ref("ep1"),
             this: LocalVar {
                 name: String::from("_v1"),
                 typ: Type::Int,
@@ -3647,7 +3278,7 @@ mod tests {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             }),
             variants: vec![
                 (
@@ -3656,11 +3287,11 @@ mod tests {
                             name: String::from("_v3"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v4"),
                             typ: Type::Bool,
@@ -3670,7 +3301,7 @@ mod tests {
                                 name: String::from("_v5"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3680,11 +3311,11 @@ mod tests {
                             name: String::from("_v6"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v7"),
                             typ: Type::Bool,
@@ -3694,7 +3325,7 @@ mod tests {
                                 name: String::from("_v8"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3711,25 +3342,21 @@ mod tests {
 
         // Struct
         let mut source = Predicate::Struct(StructPredicate {
-            name: String::from("sp1"),
+            typ: Type::typed_ref("sp1"),
             this: LocalVar {
                 name: String::from("_v4"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
+                typ: Type::type_var("E"),
             },
             body: Some(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v5"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
         });
         let mut expected = Predicate::Struct(StructPredicate {
-            name: String::from("sp1"),
+            typ: Type::typed_ref("sp1"),
             this: LocalVar {
                 name: String::from("_v4"),
                 typ: Type::Bool,
@@ -3739,63 +3366,51 @@ mod tests {
                     name: String::from("_v5"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
         });
         test(source, expected, &SUBSTITUTION_MAP);
 
         // Enum
         source = Predicate::Enum(EnumPredicate {
-            name: String::from("ep1"),
+            typ: Type::typed_ref("ep1"),
             this: LocalVar {
                 name: String::from("_v1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
             discriminant_field: Field {
                 name: String::from("f1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("E"),
-                }),
+                typ: Type::type_var("E"),
             },
             discriminant_bounds: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             }),
             variants: vec![
                 (
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v3"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v4"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
                         body: Some(Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v5"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3803,36 +3418,30 @@ mod tests {
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v6"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v7"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
                         body: Some(Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v8"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
             ],
         });
         expected = Predicate::Enum(EnumPredicate {
-            name: String::from("ep1"),
+            typ: Type::typed_ref("ep1"),
             this: LocalVar {
                 name: String::from("_v1"),
                 typ: Type::Int,
@@ -3846,7 +3455,7 @@ mod tests {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             }),
             variants: vec![
                 (
@@ -3855,11 +3464,11 @@ mod tests {
                             name: String::from("_v3"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v4"),
                             typ: Type::Bool,
@@ -3869,7 +3478,7 @@ mod tests {
                                 name: String::from("_v5"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3879,11 +3488,11 @@ mod tests {
                             name: String::from("_v6"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     String::from("variant1"),
                     StructPredicate {
-                        name: String::from("sp1"),
+                        typ: Type::typed_ref("sp1"),
                         this: LocalVar {
                             name: String::from("_v7"),
                             typ: Type::Bool,
@@ -3893,7 +3502,7 @@ mod tests {
                                 name: String::from("_v8"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         })),
                     },
                 ),
@@ -3903,17 +3512,15 @@ mod tests {
 
         // Bodyless
         source = Predicate::Bodyless(
-            String::from("b1"),
+            Type::type_var("b1"),
             LocalVar {
                 name: String::from("_v1"),
-                typ: Type::TypeVar(TypeVar {
-                    label: String::from("T"),
-                }),
+                typ: Type::type_var("T"),
             },
         );
 
         expected = Predicate::Bodyless(
-            String::from("b1"),
+            Type::type_var("b1"),
             LocalVar {
                 name: String::from("_v1"),
                 typ: Type::Int,
@@ -3932,20 +3539,16 @@ mod tests {
             Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
-                position: position.clone(),
+                position,
             }),
         ]);
         let expected = Trigger::new(vec![
@@ -3954,14 +3557,14 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v2"),
                     typ: Type::Bool,
                 },
-                position: position.clone(),
+                position,
             }),
         ]);
         test(source, expected, &SUBSTITUTION_MAP);
@@ -4019,11 +3622,9 @@ mod tests {
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v1"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     CfgBlockIndex {
                         method_uuid: uuid,
@@ -4034,11 +3635,9 @@ mod tests {
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     CfgBlockIndex {
                         method_uuid: uuid,
@@ -4059,7 +3658,7 @@ mod tests {
                             name: String::from("_v1"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     CfgBlockIndex {
                         method_uuid: uuid,
@@ -4072,7 +3671,7 @@ mod tests {
                             name: String::from("_v2"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     CfgBlockIndex {
                         method_uuid: uuid,
@@ -4098,28 +3697,24 @@ mod tests {
         let source = CfgBlock {
             stmts: vec![
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v1"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             successor: Successor::GotoSwitch(
@@ -4128,11 +3723,9 @@ mod tests {
                         Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v3"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
                         CfgBlockIndex {
                             method_uuid: uuid,
@@ -4143,11 +3736,9 @@ mod tests {
                         Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v4"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("E"),
-                                }),
+                                typ: Type::type_var("E"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
                         CfgBlockIndex {
                             method_uuid: uuid,
@@ -4164,24 +3755,24 @@ mod tests {
         let expected = CfgBlock {
             stmts: vec![
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v1"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             successor: Successor::GotoSwitch(
@@ -4192,7 +3783,7 @@ mod tests {
                                 name: String::from("_v3"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         }),
                         CfgBlockIndex {
                             method_uuid: uuid,
@@ -4205,7 +3796,7 @@ mod tests {
                                 name: String::from("_v4"),
                                 typ: Type::Bool,
                             },
-                            position: position.clone(),
+                            position,
                         }),
                         CfgBlockIndex {
                             method_uuid: uuid,
@@ -4230,35 +3821,27 @@ mod tests {
         let position = Position::new(1, 2, 3);
 
         let source = CfgMethod {
-            uuid: uuid,
+            uuid,
             method_name: String::from("mn1"),
             formal_arg_count: 5,
             formal_returns: vec![
                 LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
                 LocalVar {
                     name: String::from("_v2"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
             ],
             local_vars: vec![
                 LocalVar {
                     name: String::from("_v3"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
                 LocalVar {
                     name: String::from("_v4"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("E"),
-                    }),
+                    typ: Type::type_var("E"),
                 },
             ],
             labels: vec![String::from("l1"), String::from("l2")]
@@ -4270,28 +3853,24 @@ mod tests {
             basic_blocks: vec![CfgBlock {
                 stmts: vec![
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v1"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v2"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("E"),
-                                }),
+                                typ: Type::type_var("E"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                 ],
                 successor: Successor::GotoSwitch(
@@ -4300,11 +3879,9 @@ mod tests {
                             Expr::Local(Local {
                                 variable: LocalVar {
                                     name: String::from("_v3"),
-                                    typ: Type::TypeVar(TypeVar {
-                                        label: String::from("T"),
-                                    }),
+                                    typ: Type::type_var("T"),
                                 },
-                                position: position.clone(),
+                                position,
                             }),
                             CfgBlockIndex {
                                 method_uuid: uuid,
@@ -4315,11 +3892,9 @@ mod tests {
                             Expr::Local(Local {
                                 variable: LocalVar {
                                     name: String::from("_v4"),
-                                    typ: Type::TypeVar(TypeVar {
-                                        label: String::from("E"),
-                                    }),
+                                    typ: Type::type_var("E"),
                                 },
-                                position: position.clone(),
+                                position,
                             }),
                             CfgBlockIndex {
                                 method_uuid: uuid,
@@ -4338,7 +3913,7 @@ mod tests {
             fresh_label_index: 2,
         };
         let expected = CfgMethod {
-            uuid: uuid,
+            uuid,
             method_name: String::from("mn1"),
             formal_arg_count: 5,
             formal_returns: vec![
@@ -4370,24 +3945,24 @@ mod tests {
             basic_blocks: vec![CfgBlock {
                 stmts: vec![
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v1"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v2"),
                                 typ: Type::Bool,
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                 ],
                 successor: Successor::GotoSwitch(
@@ -4398,7 +3973,7 @@ mod tests {
                                     name: String::from("_v3"),
                                     typ: Type::Int,
                                 },
-                                position: position.clone(),
+                                position,
                             }),
                             CfgBlockIndex {
                                 method_uuid: uuid,
@@ -4411,7 +3986,7 @@ mod tests {
                                     name: String::from("_v4"),
                                     typ: Type::Bool,
                                 },
-                                position: position.clone(),
+                                position,
                             }),
                             CfgBlockIndex {
                                 method_uuid: uuid,
@@ -4442,59 +4017,49 @@ mod tests {
             guard: Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v1"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             }),
             borrow: Borrow(123),
             reborrowing_nodes: vec![Borrow(1), Borrow(2)],
             reborrowed_nodes: vec![Borrow(1), Borrow(2)],
             stmts: vec![
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v3"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             borrowed_places: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v4"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v5"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             conflicting_borrows: vec![Borrow(403), Borrow(404)],
@@ -4502,11 +4067,9 @@ mod tests {
             place: Some(Expr::Local(Local {
                 variable: LocalVar {
                     name: String::from("_v6"),
-                    typ: Type::TypeVar(TypeVar {
-                        label: String::from("T"),
-                    }),
+                    typ: Type::type_var("T"),
                 },
-                position: position.clone(),
+                position,
             })),
         };
 
@@ -4516,31 +4079,31 @@ mod tests {
                     name: String::from("_v1"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             }),
             borrow: Borrow(123),
             reborrowing_nodes: vec![Borrow(1), Borrow(2)],
             reborrowed_nodes: vec![Borrow(1), Borrow(2)],
             stmts: vec![
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v2"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
                 Stmt::Obtain(Obtain {
-                    predicate_name: Expr::Local(Local {
+                    expr: Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v3"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
-                    position: position.clone(),
+                    position,
                 }),
             ],
             borrowed_places: vec![
@@ -4549,14 +4112,14 @@ mod tests {
                         name: String::from("_v4"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v5"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
             conflicting_borrows: vec![Borrow(403), Borrow(404)],
@@ -4566,7 +4129,7 @@ mod tests {
                     name: String::from("_v6"),
                     typ: Type::Int,
                 },
-                position: position.clone(),
+                position,
             })),
         };
 
@@ -4586,59 +4149,49 @@ mod tests {
                 guard: Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v1"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 borrow: Borrow(123),
                 reborrowing_nodes: vec![Borrow(1), Borrow(2)],
                 reborrowed_nodes: vec![Borrow(1), Borrow(2)],
                 stmts: vec![
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v2"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("T"),
-                                }),
+                                typ: Type::type_var("T"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v3"),
-                                typ: Type::TypeVar(TypeVar {
-                                    label: String::from("E"),
-                                }),
+                                typ: Type::type_var("E"),
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                 ],
                 borrowed_places: vec![
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v4"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("T"),
-                            }),
+                            typ: Type::type_var("T"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v5"),
-                            typ: Type::TypeVar(TypeVar {
-                                label: String::from("E"),
-                            }),
+                            typ: Type::type_var("E"),
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 ],
                 conflicting_borrows: vec![Borrow(403), Borrow(404)],
@@ -4646,31 +4199,25 @@ mod tests {
                 place: Some(Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v6"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 })),
             }],
             borrowed_places: vec![
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v7"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("T"),
-                        }),
+                        typ: Type::type_var("T"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v8"),
-                        typ: Type::TypeVar(TypeVar {
-                            label: String::from("E"),
-                        }),
+                        typ: Type::type_var("E"),
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
         };
@@ -4683,31 +4230,31 @@ mod tests {
                         name: String::from("_v1"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 borrow: Borrow(123),
                 reborrowing_nodes: vec![Borrow(1), Borrow(2)],
                 reborrowed_nodes: vec![Borrow(1), Borrow(2)],
                 stmts: vec![
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v2"),
                                 typ: Type::Int,
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                     Stmt::Obtain(Obtain {
-                        predicate_name: Expr::Local(Local {
+                        expr: Expr::Local(Local {
                             variable: LocalVar {
                                 name: String::from("_v3"),
                                 typ: Type::Bool,
                             },
-                            position: position.clone(),
+                            position,
                         }),
-                        position: position.clone(),
+                        position,
                     }),
                 ],
                 borrowed_places: vec![
@@ -4716,14 +4263,14 @@ mod tests {
                             name: String::from("_v4"),
                             typ: Type::Int,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                     Expr::Local(Local {
                         variable: LocalVar {
                             name: String::from("_v5"),
                             typ: Type::Bool,
                         },
-                        position: position.clone(),
+                        position,
                     }),
                 ],
                 conflicting_borrows: vec![Borrow(403), Borrow(404)],
@@ -4733,7 +4280,7 @@ mod tests {
                         name: String::from("_v6"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 })),
             }],
             borrowed_places: vec![
@@ -4742,14 +4289,14 @@ mod tests {
                         name: String::from("_v7"),
                         typ: Type::Int,
                     },
-                    position: position.clone(),
+                    position,
                 }),
                 Expr::Local(Local {
                     variable: LocalVar {
                         name: String::from("_v8"),
                         typ: Type::Bool,
                     },
-                    position: position.clone(),
+                    position,
                 }),
             ],
         };

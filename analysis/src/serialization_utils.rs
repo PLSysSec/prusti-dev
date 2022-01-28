@@ -1,4 +1,4 @@
-// © 2020, ETH Zurich
+// © 2021, ETH Zurich
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,7 +12,8 @@ pub fn location_to_stmt_str(location: mir::Location, mir: &mir::Body) -> String 
     if location.statement_index < bb_mir.statements.len() {
         let stmt = &bb_mir.statements[location.statement_index];
         format!("{:?}", stmt)
-    } else { // location = terminator
+    } else {
+        // location = terminator
         let terminator = bb_mir.terminator();
         format!("{:?}", terminator.kind)
     }

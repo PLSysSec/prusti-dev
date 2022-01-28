@@ -18,6 +18,7 @@ use crate::{
 
 /// Checker visitor for the specifications. Currently checks that `predicate!`
 /// functions are never used from non-specification code, but more checks may follow.
+#[derive(Default)]
 pub struct SpecChecker {
     /// Map of the `DefID`s to the `Span`s of `predicate!` functions found in the first pass.
     predicates: HashMap<DefId, Span>,
@@ -127,25 +128,24 @@ impl<'v, 'tcx> Visitor<'tcx> for CheckPredicatesVisitor<'v, 'tcx> {
 
 impl<'tcx> SpecChecker {
     pub fn new() -> Self {
-        Self {
-            predicates: HashMap::new(),
-            pred_usages: Vec::new(),
-        }
+        Self::default()
     }
 
-    pub fn check_predicate_usages(&mut self, tcx: TyCtxt<'tcx>, krate: &'tcx hir::Crate<'tcx>) {
+    pub fn check_predicate_usages(&mut self, tcx: TyCtxt<'tcx>) {
         let mut collect = CollectPredicatesVisitor {
             tcx,
             predicates: &mut self.predicates,
         };
-        intravisit::walk_crate(&mut collect, krate);
+        tcx.hir().walk_toplevel_module(&mut collect);
+        tcx.hir().walk_attributes(&mut collect);
 
         let mut visit = CheckPredicatesVisitor {
             tcx: collect.tcx,
             predicates: &self.predicates,
             pred_usages: &mut self.pred_usages,
         };
-        intravisit::walk_crate(&mut visit, krate);
+        tcx.hir().walk_toplevel_module(&mut visit);
+        tcx.hir().walk_attributes(&mut visit);
 
         debug!("Predicate funcs: {:?}", self.predicates);
         debug!("Predicate usages: {:?}", self.pred_usages);

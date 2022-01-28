@@ -7,18 +7,19 @@
 use crate::encoder::errors::{
     ErrorCtxt, SpannedEncodingResult, SpannedEncodingError, EncodingError, WithSpan
 };
+use crate::encoder::high::types::HighTypeEncoderInterface;
 use crate::encoder::mir_encoder::{MirEncoder, PlaceEncoder, PlaceEncoding};
 use crate::encoder::mir_encoder::PRECONDITION_LABEL;
 use crate::encoder::mir_interpreter::{
     run_backward_interpretation_point_to_point, BackwardMirInterpreter,
-    MultiExprBackwardInterpreterState,
+    ExprBackwardInterpreterState,
 };
-use crate::encoder::pure_function_encoder::PureFunctionBackwardInterpreter;
+use crate::encoder::mir::pure_functions::{PureFunctionBackwardInterpreter, PureFunctionEncoderInterface};
 use crate::encoder::Encoder;
 use prusti_common::config;
 use crate::encoder::SpecFunctionKind;
-use prusti_common::vir;
-use prusti_common::vir::ExprIterator;
+use vir_crate::polymorphic as vir;
+use vir_crate::polymorphic::ExprIterator;
 use prusti_interface::specs::typed;
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -28,6 +29,9 @@ use std::collections::HashMap;
 use rustc_ast::ast;
 use log::{debug, trace};
 use prusti_interface::utils::read_prusti_attr;
+use crate::encoder::mir::types::MirTypeEncoderInterface;
+
+use super::encoder::SubstMap;
 
 /// Encode an assertion coming from a specification to a `vir::Expr`.
 ///
@@ -50,6 +54,7 @@ use prusti_interface::utils::read_prusti_attr;
 ///   _values_ and not _memory locations_. This is typically used to encode pure functions.
 /// * `assertion_location`: the basic block at which the assertion should be encoded. This should
 ///   be `Some(..)` iff the assertion is a loop invariant.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_spec_assertion<'v, 'tcx: 'v>(
     encoder: &Encoder<'v, 'tcx>,
     assertion: &typed::Assertion<'tcx>,
@@ -59,6 +64,7 @@ pub fn encode_spec_assertion<'v, 'tcx: 'v>(
     targets_are_values: bool,
     assertion_location: Option<mir::BasicBlock>,
     parent_def_id: DefId,
+    tymap: &SubstMap<'tcx>,
 ) -> SpannedEncodingResult<vir::Expr> {
     let spec_encoder = SpecEncoder::new(
         encoder,
@@ -68,6 +74,7 @@ pub fn encode_spec_assertion<'v, 'tcx: 'v>(
         targets_are_values,
         assertion_location,
         parent_def_id,
+        tymap,
     );
     spec_encoder.encode_assertion(assertion)
 }
@@ -87,9 +94,11 @@ struct SpecEncoder<'p, 'v: 'p, 'tcx: 'v> {
     /// When registering errors, this gives us their
     /// associated function
     parent_def_id: DefId,
+    tymap: &'p SubstMap<'tcx>,
 }
 
 impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         encoder: &'p Encoder<'v, 'tcx>,
         pre_label: &'p str,
@@ -98,6 +107,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         targets_are_values: bool,
         assertion_location: Option<mir::BasicBlock>,
         parent_def_id: DefId,
+        tymap: &'p SubstMap<'tcx>,
     ) -> Self {
         trace!("SpecEncoder constructor");
 
@@ -109,6 +119,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
             targets_are_values,
             assertion_location,
             parent_def_id,
+            tymap,
         }
     }
 
@@ -181,8 +192,12 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         }
         for var in &bounded_vars {
             if !found_bounded_vars.contains(var) {
+                debug!("bounded_vars: {:?}", bounded_vars);
+                debug!("encoded_expressions: {:?}", encoded_expressions);
+                debug!("found_bounded_vars: {:?}", found_bounded_vars);
+                debug!("var: {:?}", var);
                 // FIXME: We should mention the missing variable in the error message.
-                let msg = "A trigger must mention all bounded variables.";
+                let msg = "a trigger must mention all bounded variables.";
                 let span = rustc_span::MultiSpan::from_spans(
                     trigger.terms().iter().map(|term| self.encoder.env().tcx().def_span(term.expr)).collect()
                 );
@@ -215,7 +230,8 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
             box typed::AssertionKind::TypeCond(ref vars, ref assertion) => {
                 let enc = |ty: ty::Ty<'tcx>| -> vir::Expr {
                     // FIXME: this is a hack to support generics. See issue #187.
-                    let ty = self.encoder.resolve_typaram(ty);
+                    // TODO polymorphic: might remove this step
+                    let ty = self.encoder.resolve_typaram(ty, self.tymap);
                     self.encoder.encode_tag_func_app(ty)
                 };
                 let typecond =
@@ -238,9 +254,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                 // TODO: refactor, simplify, or extract into a function
                 let tcx = self.encoder.env().tcx();
                 let mir = self.encoder.env().local_mir(closure.expr);
-                let result = &mir.local_decls[(0 as u32).into()];
+                let result = &mir.local_decls[0_u32.into()];
                 let ty = result.ty;
-                if let Some(ty_repl) = self.encoder.current_tymap().get(ty) {
+                if let Some(ty_repl) = self.tymap.get(ty) {
                     debug!("spec ent repl: {:?} -> {:?}", ty, ty_repl);
 
                     match ty_repl.kind() {
@@ -275,17 +291,17 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                                 vec![], // TODO: encode triggers
                                 vir::Expr::implies(
                                     encoded_pres.clone(),
-                                    vir::Expr::FuncApp(
-                                        sf_pre_name,
-                                        qvars_pre.iter()
-                                            .map(|x| vir::Expr::Local(x.clone(), vir::Position::default()))
+                                    vir::Expr::FuncApp( vir::FuncApp {
+                                        function_name: sf_pre_name,
+                                        arguments: qvars_pre.iter()
+                                            .map(|x| vir::Expr::local(x.clone()))
                                             .collect(),
-                                        (0 .. vars.args.len())
+                                        formal_arguments: (0 .. vars.args.len())
                                             .map(|i| vir::LocalVar::new(format!("_{}", i), vir::Type::Int))
                                             .collect(),
-                                        vir::Type::Bool,
-                                        vir::Position::default()
-                                    )
+                                        return_type: vir::Type::Bool,
+                                        position: vir::Position::default(),
+                                    })
                                 )
                             );
 
@@ -316,21 +332,21 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                                     // different IDs (vars.pre_id vs. vars.post_id), so we need to fix them
                                     (0 .. qvars_pre.len())
                                         .fold(encoded_pres, |e, i| {
-                                            e.replace_place(&vir::Expr::Local(qvars_pre[i].clone(), vir::Position::default()),
-                                                            &vir::Expr::Local(qvars_post[i].clone(), vir::Position::default()))
+                                            e.replace_place(&vir::Expr::local(qvars_pre[i].clone()),
+                                                            &vir::Expr::local(qvars_post[i].clone()))
                                         }),
-                                    vir::Expr::implies(
-                                        vir::Expr::FuncApp(
-                                            sf_post_name,
-                                            qvars_post.iter()
-                                                .map(|x| vir::Expr::Local(x.clone(), vir::Position::default()))
+                                        vir::Expr::implies(
+                                            vir::Expr::FuncApp( vir::FuncApp {
+                                                function_name: sf_post_name,
+                                                arguments: qvars_post.iter()
+                                                .map(|x| vir::Expr::local(x.clone()))
                                                 .collect(),
-                                            (0 ..= vars.args.len())
+                                                formal_arguments: (0 ..= vars.args.len())
                                                 .map(|i| vir::LocalVar::new(format!("_{}", i), vir::Type::Int))
                                                 .collect(),
-                                            vir::Type::Bool,
-                                            vir::Position::default()
-                                        ),
+                                                return_type: vir::Type::Bool,
+                                                position: vir::Position::default(),
+                                            }),
                                         posts.iter()
                                             .map(|x| self.encode_assertion(x))
                                             .collect::<Result<Vec<vir::Expr>, _>>()?
@@ -377,6 +393,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
 
             let encoded_arg = self.encode_quantifier_arg(*arg, ty, &format!("{}_{}", vars.spec_id, vars.id));
             if config::check_overflows() {
+                debug_assert!(self.encoder.env().type_is_copy(ty));
                 bounds.extend(self.encoder.encode_type_bounds(&encoded_arg.clone().into(), ty));
             } else if config::encode_unsigned_num_constraint() {
                 if let ty::TyKind::Uint(_) = ty.kind() {
@@ -394,12 +411,10 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         let encoded_body = self.encode_assertion(body)?;
         let final_body = if bounds.is_empty() {
             encoded_body
+        } else if exists {
+            vir::Expr::and(bounds.into_iter().conjoin(), encoded_body)
         } else {
-            if exists {
-                vir::Expr::and(bounds.into_iter().conjoin(), encoded_body)
-            } else {
-                vir::Expr::implies(bounds.into_iter().conjoin(), encoded_body)
-            }
+            vir::Expr::implies(bounds.into_iter().conjoin(), encoded_body)
         };
         if exists {
             Ok(vir::Expr::exists(
@@ -445,9 +460,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
             outer_location,
             captured_operands,
             captured_operand_tys,
-        ) = opt_instantiation.expect(
-            &format!("cannot find definition site for closure {:?}", inner_def_id)
-        );
+        ) = opt_instantiation.unwrap_or_else(|| panic!("cannot find definition site for closure {:?}", inner_def_id));
         let outer_mir = self.encoder.env().local_mir(outer_def_id.expect_local());
         let outer_mir_encoder = MirEncoder::new(self.encoder, &outer_mir, outer_def_id);
         let outer_span = outer_mir_encoder.get_span_of_location(outer_location);
@@ -461,11 +474,11 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         let should_closure_be_dereferenced = inner_mir_encoder.can_be_dereferenced(closure_ty);
         let (deref_closure_var, _deref_closure_ty) = if should_closure_be_dereferenced {
             let res = inner_mir_encoder
-                .encode_deref(closure_var.clone().into(), closure_ty)
+                .encode_deref(closure_var.into(), closure_ty)
                 .with_span(outer_span)?;
             (res.0, res.1)
         } else {
-            (closure_var.clone().into(), *closure_ty)
+            (closure_var.into(), *closure_ty)
         };
         trace!("closure_ty: {:?}", closure_ty);
         trace!("deref_closure_var: {:?}", deref_closure_var);
@@ -478,6 +491,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         let mut replacements: Vec<(vir::Expr, vir::Expr)> = vec![];
 
         // Replacement 1: translate a local variable from the closure to a place in the outer MIR
+        let substs = &self.encoder.type_substitution_polymorphic_type_map(self.tymap).with_span(outer_span)?;
         let inner_captured_places: Vec<vir::Expr> = captured_tys
             .iter()
             .enumerate()
@@ -485,9 +499,10 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                 let field_name = format!("closure_{}", index);
                 self.encoder.encode_raw_ref_field(field_name, captured_ty)
                     .with_span(outer_span)
-                    .map(|encoded_field|
-                        deref_closure_var.clone().field(encoded_field)
-                    )
+                    .map(|encoded_field| {
+                        let place = deref_closure_var.clone().field(encoded_field);
+                        place.patch_types(substs)
+                    })
             })
             .collect::<Result<_, _>>()?;
         let outer_captured_places: Vec<_> = captured_operands
@@ -496,7 +511,8 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
             .collect::<Result<Vec<_>, _>>()
             .with_span(outer_span)?
             .into_iter()
-            .map(|x| x.unwrap())
+            .map(|x| x.unwrap().patch_types(substs)
+        )
             .collect();
         for (index, (inner_place, outer_place)) in inner_captured_places
             .iter()
@@ -580,14 +596,16 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         let mir = self.encoder.env().local_mir(def_id.expect_local());
 
         // Translate an intermediate state to the state at the beginning of the method
-        let state = MultiExprBackwardInterpreterState::new_single(
-            expr.clone()
+        let substs = self.encoder.type_substitution_polymorphic_type_map(self.tymap).with_span(mir.span)?;
+        let state = ExprBackwardInterpreterState::new_defined_with_substs(
+            expr,
+            substs,
         );
         let interpreter = StraightLineBackwardInterpreter::new(
             self.encoder,
             &mir,
             def_id,
-            self.parent_def_id,
+            self.parent_def_id, self.tymap,
         );
         let initial_state = run_backward_interpretation_point_to_point(
             &mir,
@@ -596,11 +614,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
             expr_location.block,
             expr_location.statement_index,
             state,
-            MultiExprBackwardInterpreterState::new(vec![]),
-        )?.expect(
-            &format!("cannot encode {:?} because its CFG contains a loop", def_id)
-        );
-        let pre_state_expr = initial_state.into_expressions().remove(0);
+            ExprBackwardInterpreterState::new_undefined(),
+        )?.unwrap_or_else(|| panic!("cannot encode {:?} because its CFG contains a loop", def_id));
+        let pre_state_expr = initial_state.into_expr().unwrap();
 
         trace!("Expr at the beginning: {}", pre_state_expr);
         Ok(pre_state_expr)
@@ -613,7 +629,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
         debug!("encode_expression {:?}", assertion_expr);
 
         let mut curr_def_id = assertion_expr.expr.to_def_id();
-        let mut curr_expr = self.encoder.encode_pure_expression(curr_def_id, self.parent_def_id)?;
+        let mut curr_expr = self.encoder.encode_pure_expression(curr_def_id, self.parent_def_id, self.tymap)?;
 
         loop {
             let done = self.encoder.get_single_closure_instantiation(curr_def_id).is_none();
@@ -650,6 +666,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
 
         // Replacements to use the provided `target_args` and `target_return`
         let mut replacements: Vec<(vir::Expr, vir::Expr)> = vec![];
+        let substs = &self.encoder.type_substitution_polymorphic_type_map(self.tymap).with_span(mir.span)?;
 
         // Replacement 1: replace the arguments with the `target_args`.
         replacements.extend(
@@ -657,7 +674,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                 .zip(self.target_args
                          .iter()
                          .skip(if skip_first { 1 } else { 0 }))
-                .take(if let Some(_) = self.target_return { mir.arg_count - 1 } else { mir.arg_count })
+                .take(if self.target_return.is_some() { mir.arg_count - 1 } else { mir.arg_count })
                 .map(|(local, target_arg)| {
                     let local_ty = mir.local_decls[local].ty;
                     // will panic if attempting to encode unsupported type
@@ -670,7 +687,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                     } else {
                         spec_local.into()
                     };
-                    Ok((spec_local_place, target_arg.clone()))
+                    Ok((spec_local_place.patch_types(substs), target_arg.clone()))
                 })
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
@@ -689,9 +706,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
                     fake_return_ty
                 ).with_span(mir_encoder.get_local_span(fake_return_local))?
             } else {
-                spec_fake_return.clone().into()
+                spec_fake_return.into()
             };
-            replacements.push((spec_fake_return_place, target_return.clone()));
+            replacements.push((spec_fake_return_place.patch_types(substs), target_return.clone()));
         }
 
         // Do the replacements
@@ -702,7 +719,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> SpecEncoder<'p, 'v, 'tcx> {
             if label == PRECONDITION_LABEL {
                 self.pre_label.to_string()
             } else {
-                label.clone()
+                label
             }
         });
         debug!("MIR expr {:?} --> {}", assertion_expr.id, curr_expr);
@@ -722,7 +739,7 @@ struct StraightLineBackwardInterpreter<'p, 'v: 'p, 'tcx: 'v> {
     interpreter: PureFunctionBackwardInterpreter<'p, 'v, 'tcx>,
 }
 
-/// XXX: This encoding works backward, but there is the risk of generating expressions whose length
+/// This encoding works backward, so there is the risk of generating expressions whose length
 /// is exponential in the number of branches. If this becomes a problem, consider doing a forward
 /// encoding (keeping path conditions expressions).
 impl<'p, 'v: 'p, 'tcx: 'v> StraightLineBackwardInterpreter<'p, 'v, 'tcx> {
@@ -731,10 +748,11 @@ impl<'p, 'v: 'p, 'tcx: 'v> StraightLineBackwardInterpreter<'p, 'v, 'tcx> {
         mir: &'p mir::Body<'tcx>,
         def_id: DefId,
         parent_def_id: DefId,
+        tymap: &'p SubstMap<'tcx>,
     ) -> Self {
         StraightLineBackwardInterpreter {
             interpreter: PureFunctionBackwardInterpreter::new(
-                encoder, mir, def_id, false, parent_def_id
+                encoder, mir, def_id, false, parent_def_id, tymap.clone(),
             ),
         }
     }
@@ -743,7 +761,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> StraightLineBackwardInterpreter<'p, 'v, 'tcx> {
 impl<'p, 'v: 'p, 'tcx: 'v> BackwardMirInterpreter<'tcx>
     for StraightLineBackwardInterpreter<'p, 'v, 'tcx>
 {
-    type State = MultiExprBackwardInterpreterState;
+    type State = ExprBackwardInterpreterState;
     type Error = SpannedEncodingError;
 
     fn apply_terminator(
@@ -753,15 +771,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> BackwardMirInterpreter<'tcx>
         states: HashMap<mir::BasicBlock, &Self::State>,
     ) -> Result<Self::State, Self::Error> {
         trace!("apply_terminator {:?}, states: {:?}", term, states);
-        if !states.is_empty() && states.values().all(|state| !state.exprs().is_empty()) {
-            // All states are initialized
-            self.interpreter.apply_terminator(bb, term, states)
-        } else {
-            // One of the states is not yet initialized
-            trace!("Skip terminator {:?}", term);
-            Ok(MultiExprBackwardInterpreterState::new(vec![]))
-        }
+        self.interpreter.apply_terminator(bb, term, states)
     }
+
     fn apply_statement(
         &self,
         bb: mir::BasicBlock,
@@ -770,14 +782,6 @@ impl<'p, 'v: 'p, 'tcx: 'v> BackwardMirInterpreter<'tcx>
         state: &mut Self::State,
     ) -> Result<(), Self::Error> {
         trace!("apply_statement {:?}, state: {:?}", stmt, state);
-        if !state.exprs().is_empty() {
-            // The state is initialized
-            self.interpreter
-                .apply_statement(bb, stmt_index, stmt, state)?;
-        } else {
-            // The state is not yet initialized
-            trace!("Skip statement {:?}", stmt);
-        }
-        Ok(())
+        self.interpreter.apply_statement(bb, stmt_index, stmt, state)
     }
 }

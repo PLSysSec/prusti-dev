@@ -32,11 +32,11 @@ use std::{
 };
 pub use verifier_runner::*;
 use verifier_thread::*;
-use viper::ProgramVerificationResult;
+use viper::VerificationResult;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerifierPanicked;
-pub type RemoteVerificationResult = Result<ProgramVerificationResult, VerifierPanicked>;
+pub type RemoteVerificationResult = Result<VerificationResult, VerifierPanicked>;
 
 pub struct PrustiServer {
     verifier_builder: Arc<VerifierBuilder>,
@@ -75,10 +75,8 @@ impl PrustiServer {
             )
         });
 
-        match thread
-            .verify(request.programs, request.program_name.clone())
-            .wait()
-        {
+        let program_name = request.program.name.clone();
+        match thread.verify(request.program).wait() {
             Ok(result) => {
                 // put back the thread for later reuse
                 let mut threads = self.threads.write().unwrap();
@@ -86,14 +84,16 @@ impl PrustiServer {
                     // evict least-recently-used thread from cache)
                     threads.pop_back();
                 }
-                threads.push_front(thread);
+                if self.cache_size > 0 {
+                    threads.push_front(thread);
+                }
                 Ok(result)
             }
             Err(_) => {
                 // canceled—the verifier thread panicked
                 error!(
-                    "Panic while handling verification request {}",
-                    request.program_name
+                    "Panic while handling verification request for {}",
+                    program_name
                 );
                 Err(VerifierPanicked)
             }

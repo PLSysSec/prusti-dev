@@ -160,10 +160,8 @@ fn get_keys(settings: &Config) -> HashSet<String> {
 }
 
 fn check_keys(settings: &Config, allowed_keys: &HashSet<String>, source: &str) {
-    for (key, _) in &settings.cache.clone().into_table().unwrap() {
-        if !allowed_keys.contains(key) {
-            panic!("{} contains unknown configuration flag: “{}”", source, key);
-        }
+    for key in settings.cache.clone().into_table().unwrap().keys() {
+        assert!(allowed_keys.contains(key), "{} contains unknown configuration flag: “{}”", source, key);
     }
 }
 
@@ -190,7 +188,7 @@ fn read_setting<T>(name: &'static str) -> T
 where
     T: Deserialize<'static>,
 {
-    read_optional_setting(name).expect(&format!("Failed to read setting {:?}", name))
+    read_optional_setting(name).unwrap_or_else(|| panic!("Failed to read setting {:?}", name))
 }
 
 /// Should Prusti behave exactly like rustc?
@@ -401,7 +399,7 @@ pub fn optimizations() -> Optimizations {
 
     let mut opt = Optimizations::all_disabled();
 
-    for s in optimizations_string.split(","){
+    for s in optimizations_string.split(','){
         let trimmed = s.trim();
         match trimmed {
             "all" => opt = Optimizations::all_enabled(),
@@ -418,7 +416,7 @@ pub fn optimizations() -> Optimizations {
         }
     }
 
-    return opt;
+    opt
 }
 
 /// Enable purification optimization for impure functions.

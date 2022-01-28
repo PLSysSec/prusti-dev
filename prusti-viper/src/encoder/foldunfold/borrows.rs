@@ -4,9 +4,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use prusti_common::vir;
-use std::collections::HashMap;
-use std::io;
+use std::{collections::HashMap, io};
+use vir_crate::polymorphic as vir;
 
 pub(super) struct BasicBlock<'a> {
     pub guard: vir::Expr,
@@ -17,6 +16,7 @@ pub(super) struct BasicBlock<'a> {
     pub successors: Vec<usize>,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub(super) struct CFG<'a> {
     pub basic_blocks: Vec<BasicBlock<'a>>,
     /// Basic blocks that connect a pair of basic blocks. They are needed for performing
@@ -70,8 +70,15 @@ impl<'a> CFG<'a> {
             write!(graph, "<table>")?;
             write!(
                 graph,
-                "<tr><td>borrow:</td><td>{:?}</td></tr>",
-                block.node.borrow
+                "<tr><td>borrow:</td><td>{:?}<br/>{}</td></tr>",
+                block.node.borrow,
+                block
+                    .node
+                    .stmts
+                    .iter()
+                    .map(|s| escape_html(s.to_string()))
+                    .collect::<Vec<_>>()
+                    .join("<br/>"),
             )?;
             for (i, stmt) in block.statements.iter().enumerate() {
                 write!(

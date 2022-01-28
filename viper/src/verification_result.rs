@@ -4,21 +4,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use JavaException;
 use silicon_counterexample::SiliconCounterexample;
+use JavaException;
 
 /// The result of a verification request on a Viper program.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ProgramVerificationResult {
-    /// The errors reported by the verification.
-    pub verification_errors: Vec<VerificationError>,
-    /// The consistency errors reported by the verifier.
-    pub consistency_errors: Vec<ConsistencyError>,
-    /// Java exceptions raised by the verifier.
-    pub java_exceptions: Vec<JavaExceptionWithOrigin>,
-}
-
-/// The result of a verification request on a Viper method.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VerificationResult {
     /// The program verified.

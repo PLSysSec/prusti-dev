@@ -6,7 +6,8 @@
 
 //! A module that contains various VIR optimizations.
 
-use crate::vir::{CfgMethod, Program, ToGraphViz};
+use crate::vir::polymorphic_vir::{CfgMethod, Program};
+use crate::vir::ToGraphViz;
 use crate::config::{self, optimizations, Optimizations};
 
 pub mod folding;
@@ -49,7 +50,7 @@ fn log_methods(
 pub fn optimize_program(p: Program, source_file_name: &str) -> Program {
     let mut program = p;
     let optimizations = config::optimizations();
-    info!("Enabled optimisations: {:?}", optimizations);
+    debug!("Enabled optimisations: {:?}", optimizations);
 
     // can't borrow self because we need to move fields
     if optimizations.inline_constant_functions {
@@ -85,7 +86,7 @@ pub fn optimize_program(p: Program, source_file_name: &str) -> Program {
             .collect();
         program.functions = program.functions
             .into_iter()
-            .map(|f| folding::FoldingOptimizer::optimize(f))
+            .map(folding::FoldingOptimizer::optimize)
             .collect();
         log_methods(
             source_file_name,

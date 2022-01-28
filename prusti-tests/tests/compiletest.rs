@@ -27,11 +27,15 @@ fn find_prusti_rustc_path() -> PathBuf {
     } else {
         "prusti-rustc"
     };
-    let local_prusti_rustc_path: PathBuf = ["target", target_directory, executable_name].iter().collect();
+    let local_prusti_rustc_path: PathBuf = ["target", target_directory, executable_name]
+        .iter()
+        .collect();
     if local_prusti_rustc_path.exists() {
         return local_prusti_rustc_path;
     }
-    let workspace_prusti_rustc_path: PathBuf = ["..", "target", target_directory, executable_name].iter().collect();
+    let workspace_prusti_rustc_path: PathBuf = ["..", "target", target_directory, executable_name]
+        .iter()
+        .collect();
     if workspace_prusti_rustc_path.exists() {
         return workspace_prusti_rustc_path;
     }
@@ -71,8 +75,10 @@ impl Drop for TemporaryEnvVar {
 }
 
 fn run_prusti_tests(group_name: &str, filter: &Option<String>, rustc_flags: Option<&str>) {
-    let mut config = Config::default();
-    config.rustc_path = find_prusti_rustc_path();
+    let mut config = Config {
+        rustc_path: find_prusti_rustc_path(),
+        ..Config::default()
+    };
 
     // Filter the tests to run
     if let Some(filter) = filter {
@@ -80,16 +86,13 @@ fn run_prusti_tests(group_name: &str, filter: &Option<String>, rustc_flags: Opti
     }
 
     // Add compilation flags
-    config.target_rustcflags = Some(format!(
-        "--edition=2018 {}",
-        rustc_flags.unwrap_or("")
-    ));
+    config.target_rustcflags = Some(format!("--edition=2018 {}", rustc_flags.unwrap_or("")));
 
     let path: PathBuf = ["tests", group_name, "ui"].iter().collect();
     if path.exists() {
         config.target_rustcflags = Some(format!(
             "--color=never {}",
-            config.target_rustcflags.unwrap_or("".to_string())
+            config.target_rustcflags.unwrap_or_else(|| "".to_string())
         ));
         config.mode = Mode::Ui;
         config.src_base = path;
@@ -109,11 +112,6 @@ fn run_prusti_tests(group_name: &str, filter: &Option<String>, rustc_flags: Opti
         config.src_base = path;
         run_tests(&config);
     }
-
-    // Delete the nll-facts directory to avoid running out of hard drive
-    // space. Ignore any errors that may occur.
-    let _ = std::fs::remove_dir_all("nll-facts");
-    let _ = std::fs::remove_dir_all("log/nll-facts");
 }
 
 fn run_no_verification(group_name: &str, filter: &Option<String>) {
@@ -137,18 +135,12 @@ fn run_verification_base(group_name: &str, filter: &Option<String>) {
 }
 
 fn run_verification_no_overflow(group_name: &str, filter: &Option<String>) {
-    let _temporary_env_vars = (
-        TemporaryEnvVar::set("PRUSTI_CHECK_OVERFLOWS", "false"),
-    );
+    let _temporary_env_vars = (TemporaryEnvVar::set("PRUSTI_CHECK_OVERFLOWS", "false"),);
 
     run_verification_base(group_name, filter);
 }
 
 fn run_verification_overflow(group_name: &str, filter: &Option<String>) {
-    let _temporary_env_vars = (
-        TemporaryEnvVar::set("PRUSTI_CHECK_OVERFLOWS", "true"),
-    );
-
     run_verification_base(group_name, filter);
 }
 
@@ -184,6 +176,15 @@ fn test_runner(_tests: &[&()]) {
     // Test the verifier with overflow checks enabled.
     println!("[verify_overflow]");
     run_verification_overflow("verify_overflow", &filter);
+
+    // Test the verifier with test cases that only partially verify due to known open issues.
+    // The purpose of these tests is two-fold: 1. these tests help prevent potential further
+    // regressions, because the tests also test code paths not covered by other tests; and
+    // 2. a failing test without any errors notifies the developer when a proper fix is in
+    // place. In this case, these test can be moved to the `verify/pass/` or
+    // `verify_overflow/pass` folders.
+    println!("[verify_partial]");
+    run_verification_overflow("verify_partial", &filter);
 
     // Test the verifier with panic checks disabled (i.e. verify only the core proof).
     println!("[core_proof]");

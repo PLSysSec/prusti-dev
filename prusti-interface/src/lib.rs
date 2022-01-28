@@ -8,6 +8,7 @@
 
 #![allow(unused_imports)]
 #![deny(unused_must_use)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 // #![deny(unused_imports)]
 // #![deny(unused_mut)]
@@ -24,6 +25,7 @@
 // #![feature(map_get_key_value)]
 
 extern crate config as config_crate;
+extern crate rustc_borrowck;
 extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_span;
@@ -32,6 +34,8 @@ extern crate rustc_attr;
 extern crate rustc_data_structures;
 extern crate rustc_index;
 extern crate rustc_trait_selection;
+extern crate polonius_engine;
+extern crate rustc_mir_dataflow;
 #[macro_use]
 extern crate lazy_static;
 

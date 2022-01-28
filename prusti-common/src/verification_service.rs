@@ -1,15 +1,16 @@
+use std::str::FromStr;
+
 use crate::config;
 use viper::{self, VerificationBackend};
 use crate::vir::Program;
 
 pub trait VerificationService {
-    fn verify(&self, request: VerificationRequest) -> viper::ProgramVerificationResult;
+    fn verify(&self, request: VerificationRequest) -> viper::VerificationResult;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationRequest {
-    pub programs: Vec<Program>,
-    pub program_name: String,
+    pub program: Program,
     pub backend_config: ViperBackendConfig,
 }
 
@@ -25,7 +26,7 @@ pub struct ViperBackendConfig {
 
 impl Default for ViperBackendConfig {
     fn default() -> Self {
-        let backend = VerificationBackend::from_str(&config::viper_backend());
+        let backend = VerificationBackend::from_str(&config::viper_backend()).unwrap();
         let mut verifier_args = config::extra_verifier_args();
         match backend {
             VerificationBackend::Silicon => {

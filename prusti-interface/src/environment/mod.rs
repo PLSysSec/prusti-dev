@@ -18,6 +18,9 @@ use std::cell::Ref;
 use rustc_span::{Span, MultiSpan, symbol::Symbol};
 use std::collections::HashSet;
 use log::debug;
+use std::rc::Rc;
+use std::collections::HashMap;
+use std::cell::RefCell;
 
 pub mod borrowck;
 mod collect_prusti_spec_visitor;
@@ -26,6 +29,7 @@ mod dump_borrowck_info;
 mod loops;
 mod loops_utils;
 pub mod mir_analyses;
+pub mod mir_storage;
 pub mod mir_utils;
 pub mod place_set;
 pub mod polonius_info;
@@ -37,6 +41,7 @@ use rustc_hir::intravisit::Visitor;
 pub use self::loops::{PlaceAccess, PlaceAccessKind, ProcedureLoops};
 pub use self::loops_utils::*;
 pub use self::procedure::{BasicBlockIndex, Procedure};
+use self::borrowck::facts::BorrowckFacts;
 // use config;
 use crate::data::ProcedureDefId;
 // use syntax::codemap::CodeMap;
@@ -47,13 +52,21 @@ use rustc_span::source_map::SourceMap;
 /// Facade to the Rust compiler.
 // #[derive(Copy, Clone)]
 pub struct Environment<'tcx> {
+    /// Cached MIR bodies.
+    bodies: RefCell<HashMap<LocalDefId, Rc<mir::Body<'tcx>>>>,
+    /// Cached borrowck information.
+    borrowck_facts: RefCell<HashMap<LocalDefId, Rc<BorrowckFacts>>>,
     tcx: TyCtxt<'tcx>,
 }
 
 impl<'tcx> Environment<'tcx> {
     /// Builds an environment given a compiler state.
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Environment { tcx }
+        Environment {
+            tcx,
+            bodies: RefCell::new(HashMap::new()),
+            borrowck_facts: RefCell::new(HashMap::new()),
+        }
     }
 
     /// Returns the path of the source that is being compiled
@@ -165,10 +178,10 @@ impl<'tcx> Environment<'tcx> {
     pub fn get_annotated_procedures(&self) -> Vec<ProcedureDefId> {
         let tcx = self.tcx;
         let mut visitor = CollectPrustiSpecVisitor::new(self);
-        tcx.hir().krate().visit_all_item_likes(&mut visitor);
+        tcx.hir().visit_all_item_likes(&mut visitor);
 
         let mut cl_visitor = CollectClosureDefsVisitor::new(self);
-        tcx.hir().krate().visit_all_item_likes(&mut cl_visitor.as_deep_visitor());
+        tcx.hir().visit_all_item_likes(&mut cl_visitor.as_deep_visitor());
 
         let mut result: Vec<_> = visitor.get_annotated_procedures();
         result.extend(cl_visitor.get_closure_defs());
@@ -184,9 +197,9 @@ impl<'tcx> Environment<'tcx> {
     /// Dump various information from the borrow checker.
     ///
     /// Mostly used for experiments and debugging.
-    pub fn dump_borrowck_info(&self, procedures: &Vec<ProcedureDefId>) {
+    pub fn dump_borrowck_info(&self, procedures: &[ProcedureDefId]) {
         if prusti_common::config::dump_borrowck_info() {
-            dump_borrowck_info::dump_borrowck_info(self.tcx(), procedures)
+            dump_borrowck_info::dump_borrowck_info(self, procedures)
         }
     }
 
@@ -198,10 +211,9 @@ impl<'tcx> Environment<'tcx> {
         crate_name
     }
 
-    /// Get the span of a definition
-    /// Note: panics on non-local `def_id`
-    pub fn get_item_span(&self, def_id: DefId) -> Span {
-        self.tcx.hir().span_if_local(def_id).unwrap()
+    /// Get the span of the given definition.
+    pub fn get_def_span(&self, def_id: DefId) -> Span {
+        self.tcx.def_span(def_id)
     }
 
     pub fn get_absolute_item_name(&self, def_id: DefId) -> String {
@@ -214,15 +226,41 @@ impl<'tcx> Environment<'tcx> {
     }
 
     /// Get a Procedure.
-    pub fn get_procedure<'a>(&'a self, proc_def_id: ProcedureDefId) -> Procedure<'a, 'tcx> {
-        Procedure::new(self.tcx(), proc_def_id)
+    pub fn get_procedure(&self, proc_def_id: ProcedureDefId) -> Procedure<'tcx> {
+        Procedure::new(self, proc_def_id)
     }
 
     /// Get the MIR body of a local procedure.
-    pub fn local_mir<'a>(&self, def_id: LocalDefId) -> Ref<'a, mir::Body<'tcx>> {
-        self.tcx().mir_promoted(
-            ty::WithOptConstParam::unknown(def_id)
-        ).0.borrow()
+    pub fn local_mir(&self, def_id: LocalDefId) -> Rc<mir::Body<'tcx>> {
+        let mut bodies = self.bodies.borrow_mut();
+        if let Some(body) = bodies.get(&def_id) {
+            body.clone()
+        } else {
+            // SAFETY: This is safe because we are feeding in the same `tcx`
+            // that was used to store the data.
+            let body_with_facts = unsafe {
+                self::mir_storage::retrieve_mir_body(self.tcx, def_id)
+            };
+            let body = body_with_facts.body;
+            let facts = BorrowckFacts {
+                input_facts: RefCell::new(Some(body_with_facts.input_facts)),
+                output_facts: body_with_facts.output_facts,
+                location_table: RefCell::new(Some(body_with_facts.location_table)),
+            };
+
+            let mut borrowck_facts = self.borrowck_facts.borrow_mut();
+            borrowck_facts.insert(def_id, Rc::new(facts));
+
+            bodies.entry(def_id).or_insert_with(|| {
+                Rc::new(body)
+            }).clone()
+        }
+    }
+
+    /// Get Polonius facts of a local procedure.
+    pub fn local_mir_borrowck_facts(&self, def_id: LocalDefId) -> Rc<BorrowckFacts> {
+        let borrowck_facts = self.borrowck_facts.borrow();
+        borrowck_facts.get(&def_id).unwrap().clone()
     }
 
     /// Get the MIR body of an external procedure.
@@ -237,7 +275,7 @@ impl<'tcx> Environment<'tcx> {
         for trait_id in traits.iter() {
             self.tcx().for_each_relevant_impl(*trait_id, ty, |impl_id| {
                 if let Some(relevant_trait_id) = self.tcx().trait_id_of_impl(impl_id) {
-                    res.insert(relevant_trait_id.clone());
+                    res.insert(relevant_trait_id);
                 }
             });
         }
@@ -257,7 +295,7 @@ impl<'tcx> Environment<'tcx> {
         self.tcx().for_each_relevant_impl(trait_id, typ, |impl_id| {
             let item = self.get_assoc_item(impl_id, name);
             if let Some(inner) = item {
-                result.push(inner.clone());
+                result.push(inner);
             }
         });
         result
@@ -266,7 +304,22 @@ impl<'tcx> Environment<'tcx> {
     pub fn type_is_copy(&self, ty: ty::Ty<'tcx>) -> bool {
         let copy_trait = self.tcx.lang_items().copy_trait();
         if let Some(copy_trait_def_id) = copy_trait {
-            self.type_implements_trait(ty, copy_trait_def_id)
+            // FIXME: We need this match because type_implements_trait
+            // does not handle all cases correctly. For example, it
+            // treats shared references as non-copy.
+            match ty.kind() {
+                ty::TyKind::Ref(_, _, mir::Mutability::Not) => {
+                    // Shared references are copy.
+                    true
+                }
+                ty::TyKind::Array(_, _) | ty::TyKind::Slice(_) => {
+                    // Arrays and slices are not copy.
+                    false
+                }
+                _ => {
+                    self.type_implements_trait(ty, copy_trait_def_id)
+                }
+            }
         } else {
             false
         }
@@ -347,10 +400,12 @@ impl<'tcx> Environment<'tcx> {
                 )
             }
             ty::TyKind::Ref(_, ref_ty, _) => {
+                // FIXME: This is incorrect. Whether some X implements
+                // T, says nothing about whether &X implements T.
                 self.type_implements_trait(ref_ty, trait_def_id)
             }
             _ => {
-                unimplemented!() // none of the remaining types should be supported yet
+                unimplemented!("ty: {:?}", ty) // none of the remaining types should be supported yet
             }
         }
     }

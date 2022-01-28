@@ -5,8 +5,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use crate::polymorphic::ast::*;
-use std::fmt;
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Domain {
@@ -14,6 +13,12 @@ pub struct Domain {
     pub functions: Vec<DomainFunc>,
     pub axioms: Vec<DomainAxiom>,
     pub type_vars: Vec<Type>,
+}
+
+impl Domain {
+    pub fn get_identifier(&self) -> String {
+        self.name.clone()
+    }
 }
 
 impl fmt::Display for Domain {
@@ -36,7 +41,7 @@ impl fmt::Display for Domain {
         for function in &self.functions {
             writeln!(f, "\t{}", function)?;
         }
-        writeln!(f, "")?;
+        writeln!(f)?;
         for axiom in &self.axioms {
             writeln!(f, "\t{}", axiom)?;
         }
@@ -51,6 +56,12 @@ pub struct DomainFunc {
     pub return_type: Type,
     pub unique: bool,
     pub domain_name: String,
+}
+
+impl DomainFunc {
+    pub fn apply(&self, args: Vec<Expr>) -> Expr {
+        Expr::domain_func_app(self.clone(), args)
+    }
 }
 
 impl fmt::Display for DomainFunc {
@@ -68,6 +79,12 @@ impl fmt::Display for DomainFunc {
             first = false
         }
         writeln!(f, "): {}", self.return_type)
+    }
+}
+
+impl WithIdentifier for DomainFunc {
+    fn get_identifier(&self) -> String {
+        compute_identifier(&self.name, &self.formal_args, &self.return_type)
     }
 }
 

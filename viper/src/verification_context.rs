@@ -7,10 +7,11 @@
 use ast_factory::*;
 use ast_utils::*;
 use jni::AttachGuard;
-use std::env;
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 use verification_backend::VerificationBackend;
-use verifier::state;
 use verifier::Verifier;
 
 pub struct VerificationContext<'a> {
@@ -30,7 +31,11 @@ impl<'a> VerificationContext<'a> {
         AstUtils::new(&self.env)
     }
 
-    pub fn new_verifier(&self, backend: VerificationBackend, report_path: Option<PathBuf>) -> Verifier<state::Started> {
+    pub fn new_verifier(
+        &self,
+        backend: VerificationBackend,
+        report_path: Option<PathBuf>,
+    ) -> Verifier {
         self.new_verifier_with_args(backend, vec![], report_path)
     }
 
@@ -39,12 +44,12 @@ impl<'a> VerificationContext<'a> {
         backend: VerificationBackend,
         extra_args: Vec<String>,
         report_path: Option<PathBuf>,
-    ) -> Verifier<state::Started> {
+    ) -> Verifier {
         let mut verifier_args: Vec<String> = vec![];
 
         // Set Z3 binary
-        let z3_exe = env::var("Z3_EXE")
-            .expect("the Z3_EXE environment variable should not be empty");
+        let z3_exe =
+            env::var("Z3_EXE").expect("the Z3_EXE environment variable should not be empty");
         info!("Using Z3 exe: '{}'", &z3_exe);
         assert!(
             Path::new(&z3_exe).is_file(),
@@ -70,12 +75,9 @@ impl<'a> VerificationContext<'a> {
         verifier_args.push("--ignoreFile".to_string());
         verifier_args.push("dummy.vpr".to_string());
 
-        debug!(
-            "Verifier arguments: '{}'",
-            verifier_args.iter().cloned().collect::<Vec<_>>().join(" ")
-        );
+        debug!("Verifier arguments: '{}'", verifier_args.to_vec().join(" "));
 
-        Verifier::<state::Uninitialized>::new(&self.env, backend, report_path)
+        Verifier::new(&self.env, backend, report_path)
             .parse_command_line(&verifier_args)
             .start()
     }

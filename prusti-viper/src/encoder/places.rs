@@ -6,7 +6,7 @@
 
 use rustc_middle::mir;
 use rustc_middle::ty::Ty;
-use rustc_index::vec::{Idx, IndexVec, IntoIdx};
+use rustc_index::vec::{Idx, IndexVec};
 use std::{iter, ops};
 
 /// A local variable used as an abstraction over both real Rust MIR local
@@ -30,9 +30,9 @@ impl From<mir::Local> for Local {
     }
 }
 
-impl Into<mir::Local> for Local {
-    fn into(self) -> mir::Local {
-        mir::Local::new(self.index())
+impl From<Local> for mir::Local {
+    fn from(val: Local) -> Self {
+        mir::Local::new(val.index())
     }
 }
 
@@ -90,7 +90,7 @@ impl<'tcx> LocalVariableManager<'tcx> {
         }
     }
 
-    pub fn iter(&self) -> iter::Map<ops::Range<usize>, IntoIdx<Local>> {
+    pub fn iter(&self) -> impl iter::Iterator<Item = Local> + 'tcx {
         self.variables.indices()
     }
 }
@@ -114,7 +114,7 @@ pub enum Place<'tcx> {
 
 impl<'a, 'tcx: 'a> From<&'a mir::Place<'tcx>> for Place<'tcx> {
     fn from(other: &'a mir::Place<'tcx>) -> Self {
-        Place::NormalPlace(other.clone())
+        Place::NormalPlace(*other)
     }
 }
 
