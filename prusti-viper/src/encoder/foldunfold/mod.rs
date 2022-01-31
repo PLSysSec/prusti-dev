@@ -12,19 +12,15 @@ use crate::encoder::{
 #[rustfmt::skip]
 use ::log::{debug, trace};
 use super::errors::SpannedEncodingError;
-use crate::encoder::{high::types::HighTypeEncoderInterface, mir::types::MirTypeEncoderInterface};
+use crate::encoder::high::types::HighTypeEncoderInterface;
 use prusti_common::{config, report, utils::to_string::ToString, vir::ToGraphViz, Stopwatch};
+use rustc_hash::{FxHashMap, FxHashSet};
 use rustc_middle::mir;
-use std::{
-    self,
-    collections::{HashMap, HashSet},
-    mem,
-    ops::Deref,
-};
+use std::{self, fmt, ops::Deref};
 use vir_crate::{
     polymorphic as vir,
     polymorphic::{
-        borrows::Borrow, CfgBlockIndex, CfgReplacer, CheckNoOpAction, ExprFolder, ExprWalker,
+        borrows::Borrow, CfgBlockIndex, CfgReplacer, CheckNoOpAction, ExprWalker,
         FallibleExprFolder, PermAmount, PermAmountError,
     },
 };
@@ -41,7 +37,7 @@ mod requirements;
 mod semantics;
 mod state;
 
-pub type Predicates = HashMap<vir::Type, vir::Predicate>;
+pub type Predicates = FxHashMap<vir::Type, vir::Predicate>;
 
 #[derive(Clone, Debug)]
 pub enum FoldUnfoldError {
@@ -63,13 +59,59 @@ pub enum FoldUnfoldError {
     MissingPredicate(vir::Type),
     /// The algorithms tried to remove a predicate that is not in the
     /// fold-unfold state.
-    FailedToRemovePred(vir::Expr),
+    FailedToRemovePred(vir::Expr, PermAmount),
     /// The algorithm tried to lookup a never-seen-before label
     MissingLabel(String),
     /// Other encoding error.
     SpannedEncodingError(SpannedEncodingError),
     /// Unsupported feature
     Unsupported(String),
+}
+
+impl fmt::Display for FoldUnfoldError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FoldUnfoldError::FailedToObtain(perm) => {
+                writeln!(f, "The required permission {} cannot be obtained.", perm)
+            }
+            FoldUnfoldError::RequiresFolding(_pred, args, frac, _variant, _pos) => {
+                writeln!(f,
+                    "A pure expression needs to fold Pred({}, {}), but Viper doesn't support 'folding .. in ..' expressions.",
+                    args[0],
+                    frac
+                )
+            }
+            FoldUnfoldError::InvalidPermAmountAdd(error) => {
+                writeln!(f, "Failed to add fractional permissions: {}.", error)
+            }
+            FoldUnfoldError::InvalidPermAmountSub(error) => {
+                writeln!(f, "Failed to subtract fractional permissions: {}.", error)
+            }
+            FoldUnfoldError::MissingPredicate(pred) => {
+                writeln!(f, "The predicate definition of {} is not available.", pred)
+            }
+            FoldUnfoldError::FailedToRemovePred(expr, frac) => {
+                writeln!(
+                    f,
+                    "Tried to exhale a Pred({}, {}) permission that is not available.",
+                    expr, frac
+                )
+            }
+            FoldUnfoldError::MissingLabel(label) => {
+                writeln!(
+                    f,
+                    "An old[{}](..) expression uses a label that has not been declared.",
+                    label
+                )
+            }
+            FoldUnfoldError::SpannedEncodingError(error) => {
+                writeln!(f, "Encoding error: {:?}", error)
+            }
+            FoldUnfoldError::Unsupported(error) => {
+                writeln!(f, "Unsupported feature: {}.", error)
+            }
+        }
+    }
 }
 
 impl From<PermAmountError> for FoldUnfoldError {
@@ -93,7 +135,7 @@ impl From<SpannedEncodingError> for FoldUnfoldError {
 }
 
 fn add_unfolding_to_expr(expr: vir::Expr, pctxt: &PathCtxt) -> Result<vir::Expr, FoldUnfoldError> {
-    let pctxt_at_label = HashMap::new();
+    let pctxt_at_label = FxHashMap::default();
     // First, add unfolding only inside old expressions
     let expr = ExprReplacer::new(pctxt.clone(), &pctxt_at_label, true).fallible_fold(expr)?;
     // Then, add unfolding expressions everywhere else
@@ -102,7 +144,7 @@ fn add_unfolding_to_expr(expr: vir::Expr, pctxt: &PathCtxt) -> Result<vir::Expr,
 
 pub fn add_folding_unfolding_to_function(
     function: vir::Function,
-    predicates: HashMap<vir::Type, vir::Predicate>,
+    predicates: FxHashMap<vir::Type, vir::Predicate>,
 ) -> Result<vir::Function, FoldUnfoldError> {
     if config::dump_debug_info() {
         prusti_common::report::log::report(
@@ -116,7 +158,7 @@ pub fn add_folding_unfolding_to_function(
     let formal_vars = function.formal_args.clone();
     // Viper functions cannot contain label statements, so knowing all usages of old expressions
     // is not needed.
-    let old_exprs = HashMap::new();
+    let old_exprs = FxHashMap::default();
     let mut pctxt = PathCtxt::new(formal_vars, &predicates, &old_exprs);
     for pre in &function.pres {
         pctxt.apply_stmt(&vir::Stmt::Inhale(vir::Inhale { expr: pre.clone() }))?;
@@ -154,8 +196,8 @@ pub fn add_folding_unfolding_to_function(
 pub fn add_fold_unfold<'p, 'v: 'p, 'tcx: 'v>(
     encoder: &'p Encoder<'v, 'tcx>,
     cfg: vir::CfgMethod,
-    borrow_locations: &'p HashMap<Borrow, mir::Location>,
-    cfg_map: &'p HashMap<mir::BasicBlock, HashSet<CfgBlockIndex>>,
+    borrow_locations: &'p FxHashMap<Borrow, mir::Location>,
+    cfg_map: &'p FxHashMap<mir::BasicBlock, FxHashSet<CfgBlockIndex>>,
     method_pos: vir::Position,
 ) -> Result<vir::CfgMethod, FoldUnfoldError> {
     let _stopwatch =
@@ -165,7 +207,7 @@ pub fn add_fold_unfold<'p, 'v: 'p, 'tcx: 'v>(
     // Collect all old expressions used in the CFG
     let old_exprs = {
         struct OldExprCollector {
-            old_exprs: HashMap<String, Vec<vir::Expr>>,
+            old_exprs: FxHashMap<String, Vec<vir::Expr>>,
         }
         impl vir::ExprWalker for OldExprCollector {
             fn walk_labelled_old(
@@ -184,7 +226,7 @@ pub fn add_fold_unfold<'p, 'v: 'p, 'tcx: 'v>(
             }
         }
         let mut old_expr_collector = OldExprCollector {
-            old_exprs: HashMap::new(),
+            old_exprs: FxHashMap::default(),
         };
         cfg.walk_expressions(|expr| old_expr_collector.walk(expr));
         old_expr_collector.old_exprs
@@ -205,7 +247,7 @@ pub fn add_fold_unfold<'p, 'v: 'p, 'tcx: 'v>(
 struct FoldUnfold<'p, 'v: 'p, 'tcx: 'v> {
     encoder: &'p Encoder<'v, 'tcx>,
     initial_pctxt: PathCtxt<'p>,
-    pctxt_at_label: HashMap<String, PathCtxt<'p>>,
+    pctxt_at_label: FxHashMap<String, PathCtxt<'p>>,
     dump_debug_info: bool,
     /// Used for debugging the dump
     foldunfold_state_filter: String,
@@ -214,8 +256,8 @@ struct FoldUnfold<'p, 'v: 'p, 'tcx: 'v> {
     check_foldunfold_state: bool,
     /// The orignal CFG
     cfg: &'p vir::CfgMethod,
-    borrow_locations: &'p HashMap<vir::borrows::Borrow, mir::Location>,
-    cfg_map: &'p HashMap<mir::BasicBlock, HashSet<CfgBlockIndex>>,
+    borrow_locations: &'p FxHashMap<vir::borrows::Borrow, mir::Location>,
+    cfg_map: &'p FxHashMap<mir::BasicBlock, FxHashSet<CfgBlockIndex>>,
     method_pos: vir::Position,
 }
 
@@ -224,14 +266,14 @@ impl<'p, 'v: 'p, 'tcx: 'v> FoldUnfold<'p, 'v, 'tcx> {
         encoder: &'p Encoder<'v, 'tcx>,
         initial_pctxt: PathCtxt<'p>,
         cfg: &'p vir::CfgMethod,
-        borrow_locations: &'p HashMap<vir::borrows::Borrow, mir::Location>,
-        cfg_map: &'p HashMap<mir::BasicBlock, HashSet<CfgBlockIndex>>,
+        borrow_locations: &'p FxHashMap<vir::borrows::Borrow, mir::Location>,
+        cfg_map: &'p FxHashMap<mir::BasicBlock, FxHashSet<CfgBlockIndex>>,
         method_pos: vir::Position,
     ) -> Self {
         FoldUnfold {
             encoder,
             initial_pctxt,
-            pctxt_at_label: HashMap::new(),
+            pctxt_at_label: FxHashMap::default(),
             dump_debug_info: config::dump_debug_info_during_fold(),
             check_foldunfold_state: config::check_foldunfold_state(),
             foldunfold_state_filter: config::foldunfold_state_filter(),
@@ -432,7 +474,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> vir::CfgReplacer<PathCtxt<'p>, ActionVec> for FoldUnf
                                     vec![format!("Acc:\n{}", acc), format!("Pred:\n{}", pred)]
                                 })
                             })
-                            .unwrap_or_else(std::vec::Vec::new)
+                            .unwrap_or_default()
                     })
                 },
             );
@@ -520,17 +562,17 @@ impl<'p, 'v: 'p, 'tcx: 'v> vir::CfgReplacer<PathCtxt<'p>, ActionVec> for FoldUnf
         let mut stmts: Vec<vir::Stmt> = vec![];
 
         if stmt_index == 0 && config::dump_path_ctxt_in_debug_info() {
-            let acc_state = pctxt.state().display_acc().replace("\n", "\n//");
+            let acc_state = pctxt.state().display_acc().replace('\n', "\n//");
             stmts.push(vir::Stmt::comment(format!(
                 "[state] acc: {{\n//{}\n//}}",
                 acc_state
             )));
-            let pred_state = pctxt.state().display_pred().replace("\n", "\n//");
+            let pred_state = pctxt.state().display_pred().replace('\n', "\n//");
             stmts.push(vir::Stmt::comment(format!(
                 "[state] pred: {{\n//{}\n//}}",
                 pred_state
             )));
-            let moved_state = pctxt.state().display_moved().replace("\n", "\n//");
+            let moved_state = pctxt.state().display_moved().replace('\n', "\n//");
             stmts.push(vir::Stmt::comment(format!(
                 "[state] moved: {{\n//{}\n//}}",
                 moved_state
@@ -544,7 +586,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> vir::CfgReplacer<PathCtxt<'p>, ActionVec> for FoldUnf
         // 2. Obtain required *curr* permissions. *old* requirements will be handled at steps 0 and/or 4.
         trace!("[step.2] replace_stmt: {}", stmt);
         {
-            let all_perms = stmt.get_required_permissions(pctxt.predicates(), pctxt.old_exprs());
+            let all_perms = stmt.get_required_permissions(pctxt.predicates());
             let pred_permissions: Vec<_> =
                 all_perms.iter().cloned().filter(|p| p.is_pred()).collect();
 
@@ -585,6 +627,33 @@ impl<'p, 'v: 'p, 'tcx: 'v> vir::CfgReplacer<PathCtxt<'p>, ActionVec> for FoldUnf
                     }));
                 }
             }
+        }
+
+        // A label has to ensure that all usages of labelled-old expressions can be later
+        // solved by *unfolding*, and not *folding*, permissions.
+        // See issue https://github.com/viperproject/prusti-dev/issues/797.
+        if let vir::Stmt::Label(label) = &stmt {
+            let curr_acc_perms = pctxt.state().acc_places();
+            let mut perms = pctxt
+                .old_exprs()
+                .get(&label.label)
+                .map(|exprs| exprs.get_required_permissions(pctxt.predicates()))
+                .unwrap_or_default();
+            // Remove what would need to be unfolded
+            perms.retain(|p| {
+                p.is_pred()
+                    && curr_acc_perms.iter().all(|q| {
+                        q.get_place()
+                            .map(|q_place| !p.has_proper_prefix(q_place))
+                            .unwrap_or(true)
+                    })
+            });
+            stmts.extend(
+                pctxt
+                    .obtain_permissions(perms.into_iter().collect())?
+                    .iter()
+                    .map(|a| a.to_stmt()),
+            );
         }
 
         // 3. Replace special statements
@@ -927,9 +996,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> vir::CfgReplacer<PathCtxt<'p>, ActionVec> for FoldUnf
                 vec![]
             };
 
-        let grouped_perms: HashMap<_, _> = exprs
+        let grouped_perms: FxHashMap<_, _> = exprs
             .iter()
-            .flat_map(|e| e.get_required_permissions(pctxt.predicates(), pctxt.old_exprs()))
+            .flat_map(|e| e.get_required_permissions(pctxt.predicates()))
             .group_by_label();
 
         let mut stmts: Vec<vir::Stmt> = vec![];
@@ -1066,7 +1135,7 @@ pub(super) fn prepend_join<'p>(
 
 struct ExprReplacer<'b, 'a: 'b> {
     curr_pctxt: PathCtxt<'a>,
-    pctxt_at_label: &'b HashMap<String, PathCtxt<'a>>,
+    pctxt_at_label: &'b FxHashMap<String, PathCtxt<'a>>,
     lhs_pctxt: Option<PathCtxt<'a>>,
     wait_old_expr: bool,
 }
@@ -1074,7 +1143,7 @@ struct ExprReplacer<'b, 'a: 'b> {
 impl<'b, 'a: 'b> ExprReplacer<'b, 'a> {
     pub fn new(
         curr_pctxt: PathCtxt<'a>,
-        pctxt_at_label: &'b HashMap<String, PathCtxt<'a>>,
+        pctxt_at_label: &'b FxHashMap<String, PathCtxt<'a>>,
         wait_old_expr: bool,
     ) -> Self {
         ExprReplacer {
@@ -1390,7 +1459,7 @@ impl<'b, 'a: 'b> FallibleExprFolder for ExprReplacer<'b, 'a> {
             // Compute the permissions that are still missing in order for the current expression
             // to be well-formed
             let perms: Vec<_> = inner_expr
-                .get_required_permissions(self.curr_pctxt.predicates(), self.curr_pctxt.old_exprs())
+                .get_required_permissions(self.curr_pctxt.predicates())
                 .into_iter()
                 .filter(|p| p.is_curr())
                 .collect();
@@ -1438,7 +1507,7 @@ impl<'b, 'a: 'b> FallibleExprFolder for ExprReplacer<'b, 'a> {
 
             // Compute the unfoldings to be generated around the function call
             let perms: Vec<_> = vir::Expr::FuncApp(func_app.clone())
-                .get_required_permissions(self.curr_pctxt.predicates(), self.curr_pctxt.old_exprs())
+                .get_required_permissions(self.curr_pctxt.predicates())
                 .into_iter()
                 .collect();
             let unfolding_actions: Vec<_> = self
@@ -1502,7 +1571,7 @@ impl<'b, 'a: 'b> FallibleExprFolder for ExprReplacer<'b, 'a> {
 
             // Compute the unfoldings to be generated around the function call
             let perms: Vec<_> = vir::Expr::DomainFuncApp(domain_func_app.clone())
-                .get_required_permissions(self.curr_pctxt.predicates(), self.curr_pctxt.old_exprs())
+                .get_required_permissions(self.curr_pctxt.predicates())
                 .into_iter()
                 .collect();
             let unfolding_actions: Vec<_> = self

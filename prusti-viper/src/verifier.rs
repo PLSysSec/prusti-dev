@@ -4,9 +4,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use prusti_common::vir::{self, optimizations::optimize_program, ToViper, ToViperDecl};
+use prusti_common::vir::{optimizations::optimize_program};
 use prusti_common::{
-    config, report::log, verification_context::VerifierBuilder, verification_service::*, Stopwatch,
+    config, report::log, Stopwatch, vir::program::Program,
 };
 use crate::encoder::Encoder;
 use crate::encoder::counterexample_translation;
@@ -16,15 +16,16 @@ use prusti_interface::data::VerificationTask;
 use prusti_interface::environment::Environment;
 use prusti_interface::PrustiError;
 // use prusti_interface::specifications::TypedSpecificationMap;
-use std::time::Instant;
-use viper::{self, VerificationBackend, Viper};
-use std::path::PathBuf;
-use std::fs::{create_dir_all, canonicalize};
-use std::ffi::OsString;
+
+use viper::{self, PersistentCache, Viper};
+
+
+
 use prusti_interface::specs::typed;
 use ::log::{info, debug, error};
-use prusti_server::{PrustiServerConnection, ServerSideService, VerifierRunner};
+use prusti_server::{VerificationRequest, PrustiClient, process_verification_request_cache, spawn_server_thread};
 use rustc_span::DUMMY_SP;
+use prusti_server::tokio::runtime::Builder;
 
 // /// A verifier builder is an object that lives entire program's
 // /// lifetime, has no mutable state, and is responsible for constructing
@@ -84,8 +85,8 @@ use rustc_span::DUMMY_SP;
 //         let backend = VerificationBackend::from_str(&config::viper_backend());
 
 //         let mut verifier_args: Vec<String> = vec![];
-//         let log_path: PathBuf = PathBuf::from(config::log_dir()).join("viper_tmp");
-//         create_dir_all(&log_path).unwrap();
+//         let log_path: PathBuf = config::log_dir().join("viper_tmp");
+//         fs::create_dir_all(&log_path).unwrap();
 //         let report_path: PathBuf = log_path.join("report.csv");
 //         let log_dir_str = log_path.to_str().unwrap();
 //         if let VerificationBackend::Silicon = backend {
@@ -145,7 +146,7 @@ where
 impl<'v, 'tcx> Verifier<'v, 'tcx> {
     pub fn new(
         env: &'v Environment<'tcx>,
-        def_spec: &'v typed::DefSpecificationMap<'tcx>,
+        def_spec: &'v typed::DefSpecificationMap,
     ) -> Self {
         Verifier {
             env,
@@ -249,17 +250,18 @@ impl<'v, 'tcx> Verifier<'v, 'tcx> {
 
         let polymorphic_programs = self.encoder.get_viper_programs();
 
-        let programs: Vec<vir::Program> = if config::simplify_encoding() {
+        let mut programs: Vec<Program> = if config::simplify_encoding() {
             stopwatch.start_next("optimizing Viper program");
             let source_file_name = self.encoder.env().source_file_name();
             polymorphic_programs.into_iter().map(
-                |program| optimize_program(program, &source_file_name).into()
+                |program| Program::Legacy(optimize_program(program, &source_file_name).into())
             ).collect()
         } else {
             polymorphic_programs.into_iter().map(
-                |program| program.into()
+                |program| Program::Legacy(program.into())
             ).collect()
         };
+        programs.extend(self.encoder.get_core_proof_programs());
 
         stopwatch.start_next("verifying Viper program");
         let verification_results = verify_programs(self.env, programs);
@@ -359,7 +361,7 @@ impl<'v, 'tcx> Verifier<'v, 'tcx> {
 
 /// Verify a list of programs.
 /// Returns a list of (program_name, verification_result) tuples.
-fn verify_programs(env: &Environment, programs: Vec<vir::Program>)
+fn verify_programs(env: &Environment, programs: Vec<Program>)
     -> Vec<(String, viper::VerificationResult)>
 {
     let source_path = env.source_path();
@@ -369,43 +371,59 @@ fn verify_programs(env: &Environment, programs: Vec<vir::Program>)
         .to_str()
         .unwrap()
         .to_owned();
-    // Prepend the Rust file name to the program.
-    let renamed_programs = programs.into_iter().map(|program| {
-        let program_name = program.name.clone();
-        let renamed_program = vir::Program {
-            name: format!("{}_{}", rust_program_name, program_name),
-            ..program
+    let verification_requests = programs.into_iter().map(|mut program| {
+        let program_name = program.get_name().to_string();
+        // Prepend the Rust file name to the program.
+        program.set_name(format!("{}_{}", rust_program_name, program_name));
+        let request = VerificationRequest {
+            program,
+            backend_config: Default::default(),
         };
-        (program_name, renamed_program)
+        (program_name, request)
     });
     if let Some(server_address) = config::server_address() {
         let server_address = if server_address == "MOCK" {
-            ServerSideService::spawn_off_thread().to_string()
+            spawn_server_thread().to_string()
         } else {
             server_address
         };
         info!("Connecting to Prusti server at {}", server_address);
-        let service = PrustiServerConnection::new(&server_address).unwrap_or_else(|error| {
+        let client = PrustiClient::new(&server_address).unwrap_or_else(|error| {
             panic!(
                 "Could not parse server address ({}) due to {:?}",
                 server_address, error
             )
         });
-        renamed_programs.map(|(program_name, program)| {
-            let request = VerificationRequest {
-                program,
-                backend_config: Default::default(),
-            };
-            (program_name, service.verify(request))
+        // Here we construct a Tokio runtime to block until completion of the futures returned by
+        // `client.verify`. However, to report verification errors as early as possible,
+        // `verify_programs` should return an asynchronous stream of verification results.
+        let mut runtime = Builder::new()
+            .basic_scheduler()
+            .thread_name("prusti-viper")
+            .enable_all()
+            .build()
+            .expect("failed to construct Tokio runtime");
+        verification_requests.map(|(program_name, request)| {
+            let remote_result = runtime.block_on(client.verify(request));
+            let result = remote_result.unwrap_or_else(|error| {
+                panic!(
+                    "Verification request of program {} failed: {:?}",
+                    program_name,
+                    error
+                )
+            });
+            (program_name, result)
         }).collect()
     } else {
         let mut stopwatch = Stopwatch::start("prusti-viper", "JVM startup");
-        let verifier_builder = VerifierBuilder::new();
-        stopwatch.start_next("running verifier");
-        let config = ViperBackendConfig::default();
-        let runner = VerifierRunner::new(&verifier_builder, &config);
-        renamed_programs.map(|(program_name, program)| {
-            (program_name, runner.verify(program))
+        let viper = Viper::new_with_args(config::extra_jvm_args());
+        stopwatch.start_next("attach current thread to the JVM");
+        let viper_thread = viper.attach_current_thread();
+        stopwatch.finish();
+        let mut cache = PersistentCache::load_cache(config::cache_path());
+        verification_requests.map(|(program_name, request)| {
+            let result = process_verification_request_cache(&viper_thread, request, &mut cache);
+            (program_name, result)
         }).collect()
     }
 }

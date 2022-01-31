@@ -1,4 +1,3 @@
-#![no_std]
 extern crate prusti_contracts;
 use prusti_contracts::*;
 
@@ -18,7 +17,7 @@ impl B {
     /// Lookup an ADT from a slice
     #[requires(index < self.len())]
     pub const fn get(&self, index: usize) -> A {
-        //~^ ERROR generating fold-unfold Viper statements failed
+        //~^ ERROR cannot generate fold-unfold Viper statements
         self.inner[index]
     }
 
@@ -26,7 +25,7 @@ impl B {
     #[pure]
     #[requires(index < self.len())]
     pub const fn get_pure(&self, index: usize) -> A {
-        //~^ ERROR generating fold-unfold Viper statements failed
+        //~^ ERROR cannot generate fold-unfold Viper statements
         self.inner[index]
     }
 }

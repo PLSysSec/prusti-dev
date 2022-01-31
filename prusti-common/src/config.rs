@@ -6,13 +6,10 @@
 
 pub mod commandline;
 
-use config_crate::{Config, Environment, File, FileFormat};
 use self::commandline::CommandLine;
-use std::collections::HashSet;
-use std::env;
-use std::sync::RwLock;
+use config_crate::{Config, Environment, File, FileFormat};
 use serde::Deserialize;
-
+use std::{collections::HashSet, env, path::PathBuf, sync::RwLock};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Optimizations {
@@ -43,7 +40,7 @@ impl Optimizations {
     }
 
     fn all_enabled() -> Self {
-        Optimizations{
+        Optimizations {
             inline_constant_functions: true,
             delete_unused_predicates: true,
             optimize_folding: true,
@@ -70,9 +67,11 @@ lazy_static! {
         settings.set_default("check_panics", true).unwrap();
         settings.set_default("encode_unsigned_num_constraint", false).unwrap();
         settings.set_default("simplify_encoding", true).unwrap();
-        settings.set_default("log_dir", "./log/").unwrap();
+        settings.set_default("log_dir", "log").unwrap();
+        settings.set_default("cache_path", "").unwrap();
         settings.set_default("dump_debug_info", false).unwrap();
         settings.set_default("dump_debug_info_during_fold", false).unwrap();
+        settings.set_default("ignore_regions", false).unwrap();
         settings.set_default("max_log_file_name_length", 60).unwrap();
         settings.set_default("dump_path_ctxt_in_debug_info", false).unwrap();
         settings.set_default("dump_reborrowing_dag_in_debug_info", false).unwrap();
@@ -88,19 +87,23 @@ lazy_static! {
         settings.set_default("skip_unsupported_features", false).unwrap();
         settings.set_default("allow_unreachable_unsupported_code", false).unwrap();
         settings.set_default("no_verify", false).unwrap();
+        settings.set_default("no_verify_deps", false).unwrap();
         settings.set_default("full_compilation", false).unwrap();
-        settings.set_default("json_communication", false).unwrap();
         settings.set_default("json_communication", false).unwrap();
         settings.set_default("optimizations","all").unwrap();
         settings.set_default("intern_names", true).unwrap();
         settings.set_default("enable_purification_optimization", false).unwrap();
         settings.set_default("enable_manual_axiomatization", false).unwrap();
+        settings.set_default::<Option<i64>>("verification_deadline", None).unwrap();
+        settings.set_default("only_lifetimes_core", false).unwrap();
 
         settings.set_default("print_desugared_specs", false).unwrap();
         settings.set_default("print_typeckd_specs", false).unwrap();
         settings.set_default("print_collected_verification_items", false).unwrap();
         settings.set_default("hide_uuids", false).unwrap();
         settings.set_default("counterexample", false).unwrap();
+        settings.set_default("print_hash", false).unwrap();
+        settings.set_default("enable_cache", true).unwrap();
 
         // Flags for debugging Prusti that can change verification results.
         settings.set_default("disable_name_mangling", false).unwrap();
@@ -161,7 +164,12 @@ fn get_keys(settings: &Config) -> HashSet<String> {
 
 fn check_keys(settings: &Config, allowed_keys: &HashSet<String>, source: &str) {
     for key in settings.cache.clone().into_table().unwrap().keys() {
-        assert!(allowed_keys.contains(key), "{} contains unknown configuration flag: “{}”", source, key);
+        assert!(
+            allowed_keys.contains(key),
+            "{} contains unknown configuration flag: “{}”",
+            source,
+            key
+        );
     }
 }
 
@@ -229,6 +237,11 @@ pub fn dump_debug_info_during_fold() -> bool {
     read_setting("dump_debug_info_during_fold")
 }
 
+/// Should the dumped debug files not contain lifetime regions?
+pub fn ignore_regions() -> bool {
+    read_setting("ignore_regions")
+}
+
 /// What is the longest allowed length of a log file name? If this is exceeded,
 /// the file name is truncated.
 pub fn max_log_file_name_length() -> usize {
@@ -260,9 +273,14 @@ pub fn foldunfold_state_filter() -> String {
     read_setting("foldunfold_state_filter")
 }
 
-/// In which folder should we sore log/dumps?
-pub fn log_dir() -> String {
-    read_setting("log_dir")
+/// In which folder should we store log/dumps?
+pub fn log_dir() -> PathBuf {
+    PathBuf::from(read_setting::<String>("log_dir"))
+}
+
+/// In which folder should we store the Verification cache
+pub fn cache_path() -> PathBuf {
+    PathBuf::from(read_setting::<String>("cache_path"))
 }
 
 /// Check binary operations for overflows
@@ -328,6 +346,16 @@ pub fn hide_uuids() -> bool {
 /// Should Prusti produce a counterexample.
 pub fn produce_counterexample() -> bool {
     read_setting("counterexample")
+}
+
+/// Should Prusti print VerificationRequest hashes.
+pub fn print_hash() -> bool {
+    read_setting("print_hash")
+}
+
+/// Should Prusti ignore cached verification results.
+pub fn enable_cache() -> bool {
+    read_setting("enable_cache")
 }
 
 /**
@@ -399,7 +427,7 @@ pub fn optimizations() -> Optimizations {
 
     let mut opt = Optimizations::all_disabled();
 
-    for s in optimizations_string.split(','){
+    for s in optimizations_string.split(',') {
         let trimmed = s.trim();
         match trimmed {
             "all" => opt = Optimizations::all_enabled(),
@@ -412,7 +440,7 @@ pub fn optimizations() -> Optimizations {
             "remove_unused_vars" => opt.remove_unused_vars = true,
             "remove_trivial_assertions" => opt.remove_trivial_assertions = true,
             "clean_cfg" => opt.clean_cfg = true,
-            _ => warn!("Ignoring Unkown optimization '{}'", trimmed)
+            _ => warn!("Ignoring Unkown optimization '{}'", trimmed),
         }
     }
 
@@ -429,6 +457,24 @@ pub fn enable_purification_optimization() -> bool {
 /// **Note:** this is currently very incomplete and may introduce unsoudnesses.
 pub fn enable_manual_axiomatization() -> bool {
     read_setting("enable_manual_axiomatization")
+}
+
+/// Set the deadline in seconds within which Prusti should encode and verify the
+/// program.
+///
+/// Prusti panics if it fails to meet this deadline. This flag is intended to be
+/// used for tests that aim to catch performance regressions.
+pub fn verification_deadline() -> Option<u64> {
+    read_setting::<Option<i64>>("verification_deadline").map(|value| {
+        value.try_into().expect("verification_deadline must be a valid u64")
+    })
+}
+
+/// Do only the core proof of the lifetimes.
+///
+/// **Note:** this is currently very incomplete.
+pub fn only_lifetimes_core() -> bool {
+    read_setting("only_lifetimes_core")
 }
 
 /// Replace the given basic blocks with ``assume false``.
@@ -450,6 +496,11 @@ pub fn allow_unreachable_unsupported_code() -> bool {
 /// Skip the verification
 pub fn no_verify() -> bool {
     read_setting("no_verify")
+}
+
+/// Skip the verification of dependencies
+pub fn no_verify_deps() -> bool {
+    read_setting("no_verify_deps")
 }
 
 /// Continue the compilation and generate the binary after Prusti terminates

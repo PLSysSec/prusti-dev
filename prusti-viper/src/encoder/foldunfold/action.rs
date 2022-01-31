@@ -6,7 +6,7 @@
 
 use crate::encoder::foldunfold::{perm::*, FoldUnfoldError};
 use std::fmt;
-use vir_crate::polymorphic::{self as vir, Expr, Fold, PermAmount, Stmt, Unfold};
+use vir_crate::polymorphic::{self as vir, Fold, Unfold};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(clippy::large_enum_variant)]
@@ -67,7 +67,7 @@ impl Action {
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Action::Fold(..) | Action::Unfold(..) => write!(f, "{}", self.to_stmt().to_string()),
+            Action::Fold(..) | Action::Unfold(..) => write!(f, "{}", self.to_stmt()),
             Action::Drop(ref perm, ref missing_perm) => {
                 write!(f, "drop {} ({})", perm, missing_perm)
             }

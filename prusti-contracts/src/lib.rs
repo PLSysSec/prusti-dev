@@ -1,4 +1,4 @@
-extern crate proc_macro;
+#![no_std]
 
 #[cfg(not(feature = "prusti"))]
 mod private {
@@ -11,9 +11,6 @@ mod private {
     /// A macro for writing a pledge on a function.
     pub use prusti_contracts_impl::after_expiry;
 
-    /// A macro for writing a conditional pledge on a function.
-    pub use prusti_contracts_impl::after_expiry_if;
-
     /// A macro for marking a function as pure.
     pub use prusti_contracts_impl::pure;
 
@@ -24,7 +21,19 @@ mod private {
     pub use prusti_contracts_impl::body_invariant;
 
     /// A macro for defining a closure with a specification.
-    pub use prusti_contracts_impl::closure;
+    /// Note: this is a declarative macro defined in this crate
+    /// because declarative macros can't be exported from
+    /// the `prusti-contracts-impl` proc-macro crate.
+    /// See <https://github.com/rust-lang/rust/issues/40090>.
+    #[macro_export]
+    macro_rules! closure {
+        ($condition:ident ($($args:tt)*), $($tail:tt)*) => {
+            $crate::closure!($($tail)*)
+        };
+        ($($tail:tt)*) => {
+            $($tail)*
+        };
+    }
 
     /// A macro for impl blocks that refine trait specifications.
     pub use prusti_contracts_impl::refine_trait_spec;
@@ -47,9 +56,6 @@ mod private {
 
     /// A macro for writing a pledge on a function.
     pub use prusti_contracts_internal::after_expiry;
-
-    /// A macro for writing a conditional pledge on a function.
-    pub use prusti_contracts_internal::after_expiry_if;
 
     /// A macro for marking a function as pure.
     pub use prusti_contracts_internal::pure;
@@ -85,6 +91,14 @@ pub fn before_expiry<T>(arg: T) -> T {
 /// context, that is at the beginning of the method call.
 pub fn old<T>(arg: T) -> T {
     arg
+}
+
+pub fn forall<T, F>(_trigger_set: T, _closure: F) -> bool {
+    true
+}
+
+pub fn exists<T, F>(_trigger_set: T, _closure: F) -> bool {
+    true
 }
 
 pub use private::*;

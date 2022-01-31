@@ -9,7 +9,8 @@ use super::super::{
     cfg::CfgBlockIndex,
 };
 use crate::polymorphic::ast::*;
-use std::{collections::HashMap, fmt};
+use rustc_hash::FxHashMap;
+use std::fmt;
 
 // TODO: Fix by boxing all `Expr`s.
 #[allow(clippy::large_enum_variant)]
@@ -354,7 +355,7 @@ impl fmt::Display for PackageMagicWand {
             writeln!(f)?;
         }
         for stmt in self.package_stmts.iter() {
-            writeln!(f, "    {}", stmt.to_string().replace("\n", "\n    "))?;
+            writeln!(f, "    {}", stmt.to_string().replace('\n', "\n    "))?;
         }
         write!(f, "}}")
     }
@@ -404,7 +405,7 @@ pub struct If {
 impl fmt::Display for If {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fn write_stmt(f: &mut fmt::Formatter, stmt: &Stmt) -> fmt::Result {
-            writeln!(f, "    {}", stmt.to_string().replace("\n", "\n    "))
+            writeln!(f, "    {}", stmt.to_string().replace('\n', "\n    "))
         }
         fn write_block(f: &mut fmt::Formatter, stmts: &[Stmt]) -> fmt::Result {
             write!(f, "{{")?;
@@ -495,6 +496,7 @@ impl Stmt {
     }
 
     // TODO: Potentially add more variants based on how they are used in encoders
+    #[must_use]
     pub fn set_pos(self, position: Position) -> Self {
         match self {
             Stmt::PackageMagicWand(PackageMagicWand {
@@ -516,6 +518,7 @@ impl Stmt {
     }
 
     // Replace a Position::default() position with `pos`
+    #[must_use]
     pub fn set_default_pos(self, pos: Position) -> Self {
         if self.pos().iter().any(|x| x.is_default()) {
             self.set_pos(pos)
@@ -525,6 +528,7 @@ impl Stmt {
     }
 
     // Replace all Position::default() positions in expressions with `pos`
+    #[must_use]
     pub fn set_default_expr_pos(self, pos: Position) -> Self {
         self.map_expr(|e| e.set_default_pos(pos))
     }

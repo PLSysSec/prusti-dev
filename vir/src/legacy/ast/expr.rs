@@ -14,7 +14,7 @@ use std::{
     mem::discriminant,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// A local var
     Local(LocalVar, Position),
@@ -32,7 +32,7 @@ pub enum Expr {
     PredicateAccessPredicate(String, Box<Expr>, PermAmount, Position),
     FieldAccessPredicate(Box<Expr>, PermAmount, Position),
     UnaryOp(UnaryOpKind, Box<Expr>, Position),
-    BinOp(BinOpKind, Box<Expr>, Box<Expr>, Position),
+    BinOp(BinaryOpKind, Box<Expr>, Box<Expr>, Position),
     /// Container Operation on a Viper container (e.g. Seq index)
     ContainerOp(ContainerOpKind, Box<Expr>, Box<Expr>, Position),
     /// Viper Seq
@@ -84,10 +84,11 @@ pub enum PlaceComponent {
 pub enum UnaryOpKind {
     Not,
     Minus,
+    IsNaN,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BinOpKind {
+pub enum BinaryOpKind {
     EqCmp,
     NeCmp,
     GtCmp,
@@ -102,6 +103,14 @@ pub enum BinOpKind {
     And,
     Or,
     Implies,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    LShr,
+    AShr,
+    Min,
+    Max,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -113,10 +122,27 @@ pub enum ContainerOpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FloatConst {
+    F32(u32),
+    F64(u64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BitVectorConst {
+    BV8(u8),
+    BV16(u16),
+    BV32(u32),
+    BV64(u64),
+    BV128(u128),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Const {
     Bool(bool),
     Int(i64),
     BigInt(String),
+    Float(FloatConst),
+    BitVector(BitVectorConst),
     /// All function pointers share the same constant, because their function
     /// is determined by the type system.
     FnPtr,
@@ -198,7 +224,7 @@ impl fmt::Display for Expr {
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>()
                     .join(", "),
-                body.to_string()
+                body
             ),
             Expr::Exists(ref vars, ref triggers, ref body, ref _pos) => write!(
                 f,
@@ -212,15 +238,11 @@ impl fmt::Display for Expr {
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>()
                     .join(", "),
-                body.to_string()
+                body
             ),
-            Expr::LetExpr(ref var, ref expr, ref body, ref _pos) => write!(
-                f,
-                "(let {:?} == ({}) in {})",
-                var,
-                expr.to_string(),
-                body.to_string()
-            ),
+            Expr::LetExpr(ref var, ref expr, ref body, ref _pos) => {
+                write!(f, "(let {:?} == ({}) in {})", var, expr, body,)
+            }
             Expr::FuncApp(ref name, ref args, ref params, ref typ, ref _pos) => write!(
                 f,
                 "{}<{},{}>({})",
@@ -230,7 +252,7 @@ impl fmt::Display for Expr {
                     .map(|p| p.typ.to_string())
                     .collect::<Vec<String>>()
                     .join(", "),
-                typ.to_string(),
+                typ,
                 args.iter()
                     .map(|f| f.to_string())
                     .collect::<Vec<String>>()
@@ -268,14 +290,11 @@ impl fmt::Display for Expr {
                 write!(f, "[({}), ({})]", inhale_expr, exhale_expr)
             }
 
-            Expr::Downcast(ref base, ref enum_place, ref field) => write!(
-                f,
-                "(downcast {} to {} in {})",
-                enum_place.to_string(),
-                field,
-                base.to_string(),
-            ),
-            Expr::SnapApp(ref expr, _) => write!(f, "snap({})", expr.to_string()),
+            Expr::Downcast(ref base, ref enum_place, ref field) => {
+                write!(f, "(downcast {} to {} in {})", enum_place, field, base,)
+            }
+
+            Expr::SnapApp(ref expr, _) => write!(f, "snap({})", expr),
         }
     }
 }
@@ -285,27 +304,36 @@ impl fmt::Display for UnaryOpKind {
         match self {
             UnaryOpKind::Not => write!(f, "!"),
             UnaryOpKind::Minus => write!(f, "-"),
+            UnaryOpKind::IsNaN => write!(f, "isNaN"),
         }
     }
 }
 
-impl fmt::Display for BinOpKind {
+impl fmt::Display for BinaryOpKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BinOpKind::EqCmp => write!(f, "=="),
-            BinOpKind::NeCmp => write!(f, "!="),
-            BinOpKind::GtCmp => write!(f, ">"),
-            BinOpKind::GeCmp => write!(f, ">="),
-            BinOpKind::LtCmp => write!(f, "<"),
-            BinOpKind::LeCmp => write!(f, "<="),
-            BinOpKind::Add => write!(f, "+"),
-            BinOpKind::Sub => write!(f, "-"),
-            BinOpKind::Mul => write!(f, "*"),
-            BinOpKind::Div => write!(f, "\\"),
-            BinOpKind::Mod => write!(f, "%"),
-            BinOpKind::And => write!(f, "&&"),
-            BinOpKind::Or => write!(f, "||"),
-            BinOpKind::Implies => write!(f, "==>"),
+            BinaryOpKind::EqCmp => write!(f, "=="),
+            BinaryOpKind::NeCmp => write!(f, "!="),
+            BinaryOpKind::GtCmp => write!(f, ">"),
+            BinaryOpKind::GeCmp => write!(f, ">="),
+            BinaryOpKind::LtCmp => write!(f, "<"),
+            BinaryOpKind::LeCmp => write!(f, "<="),
+            BinaryOpKind::Add => write!(f, "+"),
+            BinaryOpKind::Sub => write!(f, "-"),
+            BinaryOpKind::Mul => write!(f, "*"),
+            BinaryOpKind::Div => write!(f, "\\"),
+            BinaryOpKind::Mod => write!(f, "%"),
+            BinaryOpKind::And => write!(f, "&&"),
+            BinaryOpKind::Or => write!(f, "||"),
+            BinaryOpKind::Implies => write!(f, "==>"),
+            BinaryOpKind::BitAnd => write!(f, "&"),
+            BinaryOpKind::BitOr => write!(f, "|"),
+            BinaryOpKind::BitXor => write!(f, "^"),
+            BinaryOpKind::Shl => write!(f, "<<"),
+            BinaryOpKind::LShr => write!(f, ">>>"),
+            BinaryOpKind::AShr => write!(f, ">>"),
+            BinaryOpKind::Min => write!(f, "min"),
+            BinaryOpKind::Max => write!(f, "max"),
         }
     }
 }
@@ -316,6 +344,8 @@ impl fmt::Display for Const {
             Const::Bool(val) => write!(f, "{}", val),
             Const::Int(val) => write!(f, "{}", val),
             Const::BigInt(ref val) => write!(f, "{}", val),
+            Const::Float(val) => write!(f, "{:?}", val),
+            Const::BitVector(val) => write!(f, "{:?}", val),
             Const::FnPtr => write!(f, "FnPtr"),
         }
     }
@@ -351,6 +381,7 @@ impl Expr {
         }
     }
 
+    #[must_use]
     pub fn set_pos(self, pos: Position) -> Self {
         match self {
             Expr::Local(v, _) => Expr::Local(v, pos),
@@ -385,6 +416,7 @@ impl Expr {
     }
 
     // Replace all Position::default() positions with `pos`
+    #[must_use]
     pub fn set_default_pos(self, pos: Position) -> Self {
         struct DefaultPosReplacer {
             new_pos: Position,
@@ -436,23 +468,48 @@ impl Expr {
     }
 
     pub fn gt_cmp(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::GtCmp, box left, box right, Position::default())
+        Expr::BinOp(
+            BinaryOpKind::GtCmp,
+            box left,
+            box right,
+            Position::default(),
+        )
     }
 
     pub fn ge_cmp(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::GeCmp, box left, box right, Position::default())
+        Expr::BinOp(
+            BinaryOpKind::GeCmp,
+            box left,
+            box right,
+            Position::default(),
+        )
     }
 
     pub fn lt_cmp(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::LtCmp, box left, box right, Position::default())
+        Expr::BinOp(
+            BinaryOpKind::LtCmp,
+            box left,
+            box right,
+            Position::default(),
+        )
     }
 
     pub fn le_cmp(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::LeCmp, box left, box right, Position::default())
+        Expr::BinOp(
+            BinaryOpKind::LeCmp,
+            box left,
+            box right,
+            Position::default(),
+        )
     }
 
     pub fn eq_cmp(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::EqCmp, box left, box right, Position::default())
+        Expr::BinOp(
+            BinaryOpKind::EqCmp,
+            box left,
+            box right,
+            Position::default(),
+        )
     }
 
     pub fn ne_cmp(left: Expr, right: Expr) -> Self {
@@ -461,26 +518,26 @@ impl Expr {
 
     #[allow(clippy::should_implement_trait)]
     pub fn add(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Add, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::Add, box left, box right, Position::default())
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn sub(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Sub, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::Sub, box left, box right, Position::default())
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn mul(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Mul, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::Mul, box left, box right, Position::default())
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn div(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Div, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::Div, box left, box right, Position::default())
     }
 
     pub fn modulo(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Mod, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::Mod, box left, box right, Position::default())
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -504,11 +561,11 @@ impl Expr {
     }
 
     pub fn and(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::And, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::And, box left, box right, Position::default())
     }
 
     pub fn or(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Or, box left, box right, Position::default())
+        Expr::BinOp(BinaryOpKind::Or, box left, box right, Position::default())
     }
 
     pub fn xor(left: Expr, right: Expr) -> Self {
@@ -516,7 +573,12 @@ impl Expr {
     }
 
     pub fn implies(left: Expr, right: Expr) -> Self {
-        Expr::BinOp(BinOpKind::Implies, box left, box right, Position::default())
+        Expr::BinOp(
+            BinaryOpKind::Implies,
+            box left,
+            box right,
+            Position::default(),
+        )
     }
 
     pub fn forall(vars: Vec<LocalVar>, triggers: Vec<Trigger>, body: Expr) -> Self {
@@ -659,6 +721,7 @@ impl Expr {
     }
 
     /// Reconstruct place from the place components.
+    #[must_use]
     pub fn reconstruct_place(self, components: Vec<PlaceComponent>) -> Expr {
         components
             .into_iter()
@@ -669,11 +732,12 @@ impl Expr {
     }
 
     // Methods from the old `Place` structure
-
+    #[must_use]
     pub fn local(local: LocalVar) -> Self {
         Expr::Local(local, Position::default())
     }
 
+    #[must_use]
     pub fn variant(self, index: &str) -> Self {
         assert!(self.is_place());
         let field_name = format!("enum_{}", index);
@@ -682,10 +746,12 @@ impl Expr {
         Expr::Variant(box self, variant, Position::default())
     }
 
+    #[must_use]
     pub fn field(self, field: Field) -> Self {
         Expr::Field(box self, field, Position::default())
     }
 
+    #[must_use]
     pub fn addr_of(self) -> Self {
         let type_name = self.get_type().name();
         Expr::AddrOf(box self, Type::TypedRef(type_name), Position::default())
@@ -694,7 +760,7 @@ impl Expr {
     pub fn is_only_permissions(&self) -> bool {
         match self {
             Expr::PredicateAccessPredicate(..) | Expr::FieldAccessPredicate(..) => true,
-            Expr::BinOp(BinOpKind::And, box lhs, box rhs, _) => {
+            Expr::BinOp(BinaryOpKind::And, box lhs, box rhs, _) => {
                 lhs.is_only_permissions() && rhs.is_only_permissions()
             }
             _ => false,
@@ -805,6 +871,7 @@ impl Expr {
     }
 
     /// Puts an `old[label](..)` around the expression
+    #[must_use]
     pub fn old<S: fmt::Display + ToString>(self, label: S) -> Self {
         match self {
             Expr::Local(..) => {
@@ -884,6 +951,7 @@ impl Expr {
     }
 
     /// Remove access predicates.
+    #[must_use]
     pub fn purify(self) -> Self {
         struct Purifier;
         impl ExprFolder for Purifier {
@@ -1061,40 +1129,59 @@ impl Expr {
     /// Returns the type of the expression.
     /// For function applications, the return type is provided.
     pub fn get_type(&self) -> &Type {
+        self.get_maybe_type().unwrap()
+    }
+
+    pub fn get_maybe_type(&self) -> Option<&Type> {
         lazy_static! {
             static ref FN_PTR_TYPE: Type = Type::TypedRef("FnPtr".to_string());
         }
-        match self {
+        let result = match self {
             Expr::Local(LocalVar { ref typ, .. }, _)
             | Expr::Variant(_, Field { ref typ, .. }, _)
             | Expr::Field(_, Field { ref typ, .. }, _)
-            | Expr::AddrOf(_, ref typ, _)
-            | Expr::LetExpr(LocalVar { ref typ, .. }, _, _, _) => typ,
+            | Expr::AddrOf(_, ref typ, _) => typ,
             Expr::LabelledOld(_, box ref base, _)
             | Expr::Unfolding(_, _, box ref base, _, _, _)
-            | Expr::UnaryOp(_, box ref base, _) => base.get_type(),
+            | Expr::UnaryOp(_, box ref base, _)
+            | Expr::LetExpr(_, _, box ref base, _) => base.get_type(),
             Expr::FuncApp(_, _, _, ref typ, _) => typ,
             Expr::DomainFuncApp(ref func, _, _) => &func.return_type,
             Expr::Const(constant, ..) => match constant {
                 Const::Bool(..) => &Type::Bool,
                 Const::Int(..) | Const::BigInt(..) => &Type::Int,
+                Const::Float(FloatConst::F32(..)) => &Type::Float(Float::F32),
+                Const::Float(FloatConst::F64(..)) => &Type::Float(Float::F64),
+                Const::BitVector(BitVectorConst::BV8(..)) => &Type::BitVector(BitVector::BV8),
+                Const::BitVector(BitVectorConst::BV16(..)) => &Type::BitVector(BitVector::BV16),
+                Const::BitVector(BitVectorConst::BV32(..)) => &Type::BitVector(BitVector::BV32),
+                Const::BitVector(BitVectorConst::BV64(..)) => &Type::BitVector(BitVector::BV64),
+                Const::BitVector(BitVectorConst::BV128(..)) => &Type::BitVector(BitVector::BV128),
                 Const::FnPtr => &FN_PTR_TYPE,
             },
             Expr::BinOp(ref kind, box ref base1, box ref base2, _pos) => match kind {
-                BinOpKind::EqCmp
-                | BinOpKind::NeCmp
-                | BinOpKind::GtCmp
-                | BinOpKind::GeCmp
-                | BinOpKind::LtCmp
-                | BinOpKind::LeCmp
-                | BinOpKind::And
-                | BinOpKind::Or
-                | BinOpKind::Implies => &Type::Bool,
-                BinOpKind::Add
-                | BinOpKind::Sub
-                | BinOpKind::Mul
-                | BinOpKind::Div
-                | BinOpKind::Mod => {
+                BinaryOpKind::EqCmp
+                | BinaryOpKind::NeCmp
+                | BinaryOpKind::GtCmp
+                | BinaryOpKind::GeCmp
+                | BinaryOpKind::LtCmp
+                | BinaryOpKind::LeCmp
+                | BinaryOpKind::And
+                | BinaryOpKind::Or
+                | BinaryOpKind::Implies => &Type::Bool,
+                BinaryOpKind::Add
+                | BinaryOpKind::Sub
+                | BinaryOpKind::Mul
+                | BinaryOpKind::Div
+                | BinaryOpKind::Mod
+                | BinaryOpKind::BitAnd
+                | BinaryOpKind::BitOr
+                | BinaryOpKind::BitXor
+                | BinaryOpKind::Shl
+                | BinaryOpKind::LShr
+                | BinaryOpKind::AShr
+                | BinaryOpKind::Min
+                | BinaryOpKind::Max => {
                     let typ1 = base1.get_type();
                     let typ2 = base2.get_type();
                     assert_eq!(typ1, typ2, "expr: {:?}", self);
@@ -1112,18 +1199,19 @@ impl Expr {
             | Expr::PredicateAccessPredicate(..)
             | Expr::FieldAccessPredicate(..)
             | Expr::InhaleExhale(..) => {
-                unreachable!("Unexpected expression: {:?}", self);
+                return None;
             }
             Expr::Downcast(box ref base, ..) => base.get_type(),
             // Note: SnapApp returns the same type as the wrapped expression,
             // to allow for e.g. field access without special considerations.
             // SnapApps are replaced later in the encoder.
             Expr::SnapApp(box ref expr, _) => expr.get_type(),
-            Expr::ContainerOp(op_kind, box ref left, box ref right, _) => {
-                todo!("get_type container_op({:?}, {}, {})", op_kind, left, right)
+            Expr::ContainerOp(_op_kind, box ref _left, box ref _right, _) => {
+                return None;
             }
             Expr::Seq(ref ty, ..) => ty,
-        }
+        };
+        Some(result)
     }
 
     /// If returns true, then the expression is guaranteed to be boolean. However, it may return
@@ -1139,7 +1227,7 @@ impl Expr {
                 | Expr::ForAll(..)
                 | Expr::Exists(..) => true,
                 Expr::BinOp(kind, _, _, _) => {
-                    use self::BinOpKind::*;
+                    use self::BinaryOpKind::*;
                     *kind == EqCmp
                         || *kind == NeCmp
                         || *kind == GtCmp
@@ -1162,6 +1250,7 @@ impl Expr {
         }
     }
 
+    #[must_use]
     pub fn negate(self) -> Self {
         if let Expr::UnaryOp(UnaryOpKind::Not, box inner_expr, _pos) = self {
             inner_expr
@@ -1170,6 +1259,7 @@ impl Expr {
         }
     }
 
+    #[must_use]
     pub fn map_labels<F>(self, f: F) -> Self
     where
         F: Fn(String) -> Option<String>,
@@ -1188,6 +1278,7 @@ impl Expr {
         OldLabelReplacer { f }.fold(self)
     }
 
+    #[must_use]
     pub fn replace_place(self, target: &Expr, replacement: &Expr) -> Self {
         // TODO: disabled for snapshot patching
         /*
@@ -1318,6 +1409,7 @@ impl Expr {
         .fold(self)
     }
 
+    #[must_use]
     pub fn replace_multiple_places(self, replacements: &[(Expr, Expr)]) -> Self {
         // TODO: disabled for snapshot patching
         /*
@@ -1481,6 +1573,7 @@ impl Expr {
 
     /// Replaces expressions like `old[l5](old[l5](_9.val_ref).foo.bar)`
     /// into `old[l5](_9.val_ref.foo.bar)`
+    #[must_use]
     pub fn remove_redundant_old(self) -> Self {
         struct RedundantOldRemover {
             current_label: Option<String>,
@@ -1505,6 +1598,7 @@ impl Expr {
     }
 
     /// Leaves a conjunction of `acc(..)` expressions
+    #[must_use]
     pub fn filter_perm_conjunction(self) -> Self {
         struct PermConjunctionFilter();
         impl ExprFolder for PermConjunctionFilter {
@@ -1512,8 +1606,8 @@ impl Expr {
                 match e {
                     f @ Expr::PredicateAccessPredicate(..) => f,
                     f @ Expr::FieldAccessPredicate(..) => f,
-                    Expr::BinOp(BinOpKind::And, y, z, p) => {
-                        self.fold_bin_op(BinOpKind::And, y, z, p)
+                    Expr::BinOp(BinaryOpKind::And, y, z, p) => {
+                        self.fold_bin_op(BinaryOpKind::And, y, z, p)
                     }
 
                     Expr::BinOp(..)
@@ -1589,6 +1683,7 @@ impl Expr {
     }
 
     /// Replace all generic types with their instantiations by using substitution.
+    #[must_use]
     pub fn patch_types(self, substs: &HashMap<String, String>) -> Self {
         struct TypePatcher<'a> {
             substs: &'a HashMap<String, String>,
@@ -1658,174 +1753,11 @@ impl Expr {
     }
 }
 
-impl PartialEq for Expr {
-    /// Compare ignoring the `position` field
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Expr::Local(ref self_var, _), Expr::Local(ref other_var, _)) => self_var == other_var,
-            (
-                Expr::Variant(box ref self_base, ref self_variant, _),
-                Expr::Variant(box ref other_base, ref other_variant, _),
-            ) => (self_base, self_variant) == (other_base, other_variant),
-            (
-                Expr::Field(box ref self_base, ref self_field, _),
-                Expr::Field(box ref other_base, ref other_field, _),
-            ) => (self_base, self_field) == (other_base, other_field),
-            (
-                Expr::AddrOf(box ref self_base, ref self_typ, _),
-                Expr::AddrOf(box ref other_base, ref other_typ, _),
-            ) => (self_base, self_typ) == (other_base, other_typ),
-            (
-                Expr::LabelledOld(ref self_label, box ref self_base, _),
-                Expr::LabelledOld(ref other_label, box ref other_base, _),
-            ) => (self_label, self_base) == (other_label, other_base),
-            (Expr::Const(ref self_const, _), Expr::Const(ref other_const, _)) => {
-                self_const == other_const
-            }
-            (
-                Expr::MagicWand(box ref self_lhs, box ref self_rhs, self_borrow, _),
-                Expr::MagicWand(box ref other_lhs, box ref other_rhs, other_borrow, _),
-            ) => (self_lhs, self_rhs, self_borrow) == (other_lhs, other_rhs, other_borrow),
-            (
-                Expr::PredicateAccessPredicate(ref self_name, ref self_arg, self_perm, _),
-                Expr::PredicateAccessPredicate(ref other_name, ref other_arg, other_perm, _),
-            ) => (self_name, self_arg, self_perm) == (other_name, other_arg, other_perm),
-            (
-                Expr::FieldAccessPredicate(box ref self_base, self_perm, _),
-                Expr::FieldAccessPredicate(box ref other_base, other_perm, _),
-            ) => (self_base, self_perm) == (other_base, other_perm),
-            (
-                Expr::UnaryOp(self_op, box ref self_arg, _),
-                Expr::UnaryOp(other_op, box ref other_arg, _),
-            ) => (self_op, self_arg) == (other_op, other_arg),
-            (
-                Expr::BinOp(self_op, box ref self_left, box ref self_right, _),
-                Expr::BinOp(other_op, box ref other_left, box ref other_right, _),
-            ) => (self_op, self_left, self_right) == (other_op, other_left, other_right),
-            (
-                Expr::ContainerOp(self_op, box ref self_left, box ref self_right, _),
-                Expr::ContainerOp(other_op, box ref other_left, box ref other_right, _),
-            ) => (self_op, self_left, self_right) == (other_op, other_left, other_right),
-            (Expr::Seq(self_ty, self_elems, _), Expr::Seq(other_ty, other_elems, _)) => {
-                (self_ty, self_elems) == (other_ty, other_elems)
-            }
-            (
-                Expr::Cond(box ref self_cond, box ref self_then, box ref self_else, _),
-                Expr::Cond(box ref other_cond, box ref other_then, box ref other_else, _),
-            ) => (self_cond, self_then, self_else) == (other_cond, other_then, other_else),
-            (
-                Expr::ForAll(ref self_vars, ref self_triggers, box ref self_expr, _),
-                Expr::ForAll(ref other_vars, ref other_triggers, box ref other_expr, _),
-            ) => (self_vars, self_triggers, self_expr) == (other_vars, other_triggers, other_expr),
-            (
-                Expr::Exists(ref self_vars, ref self_triggers, box ref self_expr, _),
-                Expr::Exists(ref other_vars, ref other_triggers, box ref other_expr, _),
-            ) => (self_vars, self_triggers, self_expr) == (other_vars, other_triggers, other_expr),
-            (
-                Expr::LetExpr(ref self_var, box ref self_def, box ref self_expr, _),
-                Expr::LetExpr(ref other_var, box ref other_def, box ref other_expr, _),
-            ) => (self_var, self_def, self_expr) == (other_var, other_def, other_expr),
-            (
-                Expr::FuncApp(ref self_name, ref self_args, _, _, _),
-                Expr::FuncApp(ref other_name, ref other_args, _, _, _),
-            ) => (self_name, self_args) == (other_name, other_args),
-            (
-                Expr::Unfolding(
-                    ref self_name,
-                    ref self_args,
-                    box ref self_base,
-                    self_perm,
-                    ref self_variant,
-                    _,
-                ),
-                Expr::Unfolding(
-                    ref other_name,
-                    ref other_args,
-                    box ref other_base,
-                    other_perm,
-                    ref other_variant,
-                    _,
-                ),
-            ) => {
-                (self_name, self_args, self_base, self_perm, self_variant)
-                    == (
-                        other_name,
-                        other_args,
-                        other_base,
-                        other_perm,
-                        other_variant,
-                    )
-            }
-            (
-                Expr::DomainFuncApp(ref self_function_name, ref self_args, _),
-                Expr::DomainFuncApp(ref other_function_name, ref other_args, _),
-            ) => (self_function_name, self_args) == (other_function_name, other_args),
-            (Expr::SnapApp(ref self_expr, _), Expr::SnapApp(ref other_expr, _)) => {
-                self_expr == other_expr
-            }
-            (a, b) => {
-                debug_assert_ne!(discriminant(a), discriminant(b));
-                false
-            }
-        }
-    }
-}
-
-impl Eq for Expr {}
-
-impl Hash for Expr {
-    /// Hash ignoring the `position` field
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        discriminant(self).hash(state);
-        match self {
-            Expr::Local(ref var, _) => var.hash(state),
-            Expr::Variant(box ref base, variant_index, _) => (base, variant_index).hash(state),
-            Expr::Field(box ref base, ref field, _) => (base, field).hash(state),
-            Expr::AddrOf(box ref base, ref typ, _) => (base, typ).hash(state),
-            Expr::LabelledOld(ref label, box ref base, _) => (label, base).hash(state),
-            Expr::Const(ref const_expr, _) => const_expr.hash(state),
-            Expr::MagicWand(box ref lhs, box ref rhs, b, _) => (lhs, rhs, b).hash(state),
-            Expr::PredicateAccessPredicate(ref name, ref arg, perm, _) => {
-                (name, arg, perm).hash(state)
-            }
-            Expr::FieldAccessPredicate(box ref base, perm, _) => (base, perm).hash(state),
-            Expr::UnaryOp(op, box ref arg, _) => (op, arg).hash(state),
-            Expr::BinOp(op, box ref left, box ref right, _) => (op, left, right).hash(state),
-            Expr::Cond(box ref cond, box ref then_expr, box ref else_expr, _) => {
-                (cond, then_expr, else_expr).hash(state)
-            }
-            Expr::ForAll(ref vars, ref triggers, box ref expr, _) => {
-                (vars, triggers, expr).hash(state)
-            }
-            Expr::Exists(ref vars, ref triggers, box ref expr, _) => {
-                (vars, triggers, expr).hash(state)
-            }
-            Expr::LetExpr(ref var, box ref def, box ref expr, _) => (var, def, expr).hash(state),
-            Expr::FuncApp(ref name, ref args, _, _, _) => (name, args).hash(state),
-            Expr::DomainFuncApp(ref function, ref args, _) => (&function.name, args).hash(state),
-            // TODO Expr::DomainFuncApp(ref name, ref args, _, _, ref domain_name ,_) => (name, args, domain_name).hash(state),
-            Expr::Unfolding(ref name, ref args, box ref base, perm, ref variant, _) => {
-                (name, args, base, perm, variant).hash(state)
-            }
-            Expr::InhaleExhale(box ref inhale_expr, box ref exhale_expr, _) => {
-                (inhale_expr, exhale_expr).hash(state)
-            }
-            Expr::Downcast(box ref base, box ref enum_place, ref field) => {
-                (base, enum_place, field).hash(state)
-            }
-            Expr::SnapApp(ref expr, _) => expr.hash(state),
-            Expr::ContainerOp(op_kind, box ref left, box ref right, _) => {
-                (op_kind, left, right).hash(state)
-            }
-            Expr::Seq(ty, elems, _) => (ty, elems).hash(state),
-        }
-    }
-}
-
 impl Expr {
     /// Remove read permissions. For example, if the expression is
     /// `acc(x.f, read) && acc(P(x.f), write)`, then after the
     /// transformation it will be: `acc(P(x.f), write)`.
+    #[must_use]
     pub fn remove_read_permissions(self) -> Self {
         struct ReadPermRemover {}
         impl ExprFolder for ReadPermRemover {

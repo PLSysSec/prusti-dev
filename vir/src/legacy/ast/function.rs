@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::legacy::ast::*;
+use crate::{common::identifier::WithIdentifier, legacy::ast::*};
 use std::{collections::HashMap, fmt};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,31 +82,10 @@ impl Function {
     }
 }
 
-pub fn compute_identifier(name: &str, formal_args: &[LocalVar], return_type: &Type) -> String {
-    let mut identifier = name.to_string();
-    // Include the signature of the function in the function name
-    identifier.push_str("__$TY$__");
-    fn type_name(typ: &Type) -> String {
-        match typ {
-            Type::Int => "$int$".to_string(),
-            Type::Bool => "$bool$".to_string(),
-            Type::TypedRef(ref name) => name.to_string(),
-            Type::Domain(ref name) => name.to_string(),
-            Type::Snapshot(ref name) => format!("Snap${}", name),
-            Type::Seq(ref elem_ty) => format!("Seq${}", type_name(elem_ty)),
-        }
-    }
-    for arg in formal_args {
-        identifier.push_str(&type_name(&arg.typ));
-        identifier.push('$');
-    }
-    identifier.push_str(&type_name(return_type));
-    identifier
-}
-
 impl WithIdentifier for Function {
     fn get_identifier(&self) -> String {
-        compute_identifier(&self.name, &self.formal_args, &self.return_type)
+        // The functions in `low` should be already monomorphised.
+        self.name.clone()
     }
 }
 

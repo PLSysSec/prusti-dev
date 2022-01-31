@@ -4,7 +4,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::legacy::{ast::*, gather_labels::gather_labels};
+use crate::{
+    common::identifier::WithIdentifier,
+    legacy::{ast::*, gather_labels::gather_labels},
+};
+use derivative::Derivative;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -14,35 +18,28 @@ use uuid::Uuid;
 
 pub const RETURN_LABEL: &str = "end_of_method";
 
+#[derive(Derivative)]
+#[derivative(Hash)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CfgMethod {
-    // TODO: extract logic using (most) skipped fields to CfgMethodBuilder
-    #[serde(skip)]
-    pub(crate) uuid: Uuid,
-    pub(crate) method_name: String,
-    pub(crate) formal_arg_count: usize,
-    pub(crate) formal_returns: Vec<LocalVar>,
-    // FIXME: This should be pub(in super::super). However, the optimization
-    // that depends on snapshots needs to modify this field.
+    #[derivative(Hash = "ignore")]
+    pub method_name: String,
+    pub formal_arg_count: usize,
+    pub formal_returns: Vec<LocalVar>,
     pub local_vars: Vec<LocalVar>,
-    pub(crate) labels: HashSet<String>,
-    #[serde(skip)]
-    pub(crate) reserved_labels: HashSet<String>,
-    pub basic_blocks: Vec<CfgBlock>, // FIXME: Hack, should be pub(super).
-    pub(crate) basic_blocks_labels: Vec<String>,
-    #[serde(skip)]
-    pub(crate) fresh_var_index: i32,
-    #[serde(skip)]
-    pub(crate) fresh_label_index: i32,
+    #[derivative(Hash = "ignore")]
+    pub labels: HashSet<String>,
+    pub basic_blocks: Vec<CfgBlock>,
+    pub basic_blocks_labels: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct CfgBlock {
-    pub stmts: Vec<Stmt>, // FIXME: Hack, should be pub(super).
+    pub stmts: Vec<Stmt>,
     pub successor: Successor,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Successor {
     Undefined,
     Return,
@@ -50,10 +47,10 @@ pub enum Successor {
     GotoSwitch(Vec<(Expr, CfgBlockIndex)>, CfgBlockIndex),
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash, Serialize, Deserialize)]
+#[derive(Derivative)]
+#[derivative(Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct CfgBlockIndex {
-    #[serde(skip)]
-    pub(crate) method_uuid: Uuid,
     pub block_index: usize,
 }
 
@@ -79,51 +76,9 @@ impl Successor {
             }
         }
     }
-
-    pub fn replace_target(self, src: CfgBlockIndex, dst: CfgBlockIndex) -> Self {
-        assert_eq!(
-            src.method_uuid, dst.method_uuid,
-            "The provided src CfgBlockIndex is not compatible with the dst CfgBlockIndex"
-        );
-        match self {
-            Successor::Goto(target) => Successor::Goto(if target == src { dst } else { target }),
-            Successor::GotoSwitch(guarded_targets, default_target) => Successor::GotoSwitch(
-                guarded_targets
-                    .into_iter()
-                    .map(|x| (x.0, if x.1 == src { dst } else { x.1 }))
-                    .collect(),
-                if default_target == src {
-                    dst
-                } else {
-                    default_target
-                },
-            ),
-            x => x,
-        }
-    }
-
-    pub(super) fn replace_uuid(self, new_uuid: Uuid) -> Self {
-        match self {
-            Successor::Goto(target) => Successor::Goto(target.set_uuid(new_uuid)),
-            Successor::GotoSwitch(guarded_targets, default_target) => Successor::GotoSwitch(
-                guarded_targets
-                    .into_iter()
-                    .map(|x| (x.0, x.1.set_uuid(new_uuid)))
-                    .collect(),
-                default_target.set_uuid(new_uuid),
-            ),
-            x => x,
-        }
-    }
 }
 
 impl CfgBlockIndex {
-    pub(super) fn set_uuid(self, method_uuid: Uuid) -> Self {
-        CfgBlockIndex {
-            method_uuid,
-            ..self
-        }
-    }
     pub fn weak_eq(&self, other: &CfgBlockIndex) -> bool {
         self.block_index == other.block_index
     }
@@ -138,20 +93,15 @@ impl CfgMethod {
         formal_arg_count: usize,
         formal_returns: Vec<LocalVar>,
         local_vars: Vec<LocalVar>,
-        reserved_labels: Vec<String>,
     ) -> Self {
         CfgMethod {
-            uuid: Uuid::new_v4(),
             method_name,
             formal_arg_count,
             formal_returns,
             local_vars,
             labels: HashSet::new(),
-            reserved_labels: HashSet::from_iter(reserved_labels),
             basic_blocks: vec![],
             basic_blocks_labels: vec![],
-            fresh_var_index: 0,
-            fresh_label_index: 0,
         }
     }
 
@@ -172,10 +122,7 @@ impl CfgMethod {
     }
 
     pub(super) fn block_index(&self, index: usize) -> CfgBlockIndex {
-        CfgBlockIndex {
-            method_uuid: self.uuid,
-            block_index: index,
-        }
+        CfgBlockIndex { block_index: index }
     }
 
     fn is_fresh_local_name(&self, name: &str) -> bool {
@@ -183,30 +130,6 @@ impl CfgMethod {
             && self.local_vars.iter().all(|x| x.name != name)
             && !self.labels.contains(name)
             && self.basic_blocks_labels.iter().all(|x| x != name)
-    }
-
-    fn generate_fresh_local_var_name(&mut self) -> String {
-        let mut candidate_name = format!("__t{}", self.fresh_var_index);
-        self.fresh_var_index += 1;
-        while !self.is_fresh_local_name(&candidate_name)
-            || self.reserved_labels.contains(&candidate_name)
-        {
-            candidate_name = format!("__t{}", self.fresh_var_index);
-            self.fresh_var_index += 1;
-        }
-        candidate_name
-    }
-
-    pub fn get_fresh_label_name(&mut self) -> String {
-        let mut candidate_name = format!("l{}", self.fresh_label_index);
-        self.fresh_label_index += 1;
-        while !self.is_fresh_local_name(&candidate_name)
-            || self.reserved_labels.contains(&candidate_name)
-        {
-            candidate_name = format!("l{}", self.fresh_label_index);
-            self.fresh_label_index += 1;
-        }
-        candidate_name
     }
 
     /// Returns all formal arguments, formal returns, and local variables
@@ -223,13 +146,6 @@ impl CfgMethod {
         labels.extend(self.labels.iter().cloned());
         labels.extend(self.basic_blocks_labels.iter().cloned());
         labels
-    }
-
-    pub fn add_fresh_local_var(&mut self, typ: Type) -> LocalVar {
-        let name = self.generate_fresh_local_var_name();
-        let local_var = LocalVar::new(name, typ);
-        self.local_vars.push(local_var.clone());
-        local_var
     }
 
     pub fn add_local_var(&mut self, name: &str, typ: Type) {
@@ -283,27 +199,15 @@ impl CfgMethod {
 
     #[allow(dead_code)]
     pub fn get_successor(&mut self, index: CfgBlockIndex) -> &Successor {
-        assert_eq!(
-            self.uuid, index.method_uuid,
-            "The provided CfgBlockIndex doesn't belong to this CfgMethod"
-        );
         &self.basic_blocks[index.block_index].successor
     }
 
     #[allow(dead_code)]
     pub fn set_successor(&mut self, index: CfgBlockIndex, successor: Successor) {
-        assert_eq!(
-            self.uuid, index.method_uuid,
-            "The provided CfgBlockIndex doesn't belong to this CfgMethod"
-        );
         self.basic_blocks[index.block_index].successor = successor;
     }
 
     pub fn get_preceding(&self, target_index: CfgBlockIndex) -> Vec<CfgBlockIndex> {
-        assert_eq!(
-            self.uuid, target_index.method_uuid,
-            "The provided CfgBlockIndex doesn't belong to this CfgMethod"
-        );
         self.basic_blocks
             .iter()
             .enumerate()

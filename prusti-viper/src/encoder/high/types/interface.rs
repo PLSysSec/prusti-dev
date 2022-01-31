@@ -8,9 +8,15 @@ use crate::encoder::{
 #[rustfmt::skip]
 use ::log::trace;
 use prusti_common::{config, report::log};
+use rustc_hash::FxHashMap;
 use rustc_middle::ty;
-use std::{cell::RefCell, collections::HashMap};
-use vir_crate::{high as vir_high, polymorphic as vir_poly};
+use rustc_span::MultiSpan;
+use std::cell::RefCell;
+use vir_crate::{
+    high as vir_high,
+    middle::{self as vir_mid, operations::ToMiddleTypeDecl},
+    polymorphic as vir_poly,
+};
 
 #[derive(Default)]
 pub(crate) struct HighTypeEncoderState<'tcx> {
@@ -18,14 +24,14 @@ pub(crate) struct HighTypeEncoderState<'tcx> {
     /// types.
     ///
     /// Note: this is only for caching.
-    encoded_types: RefCell<HashMap<ty::TyKind<'tcx>, vir_poly::Type>>,
-    lowered_high_types: RefCell<HashMap<vir_high::Type, vir_poly::Type>>,
-    lowered_types_inverse: RefCell<HashMap<vir_poly::Type, vir_high::Type>>,
+    encoded_types: RefCell<FxHashMap<ty::TyKind<'tcx>, vir_poly::Type>>,
+    lowered_high_types: RefCell<FxHashMap<vir_high::Type, vir_poly::Type>>,
+    lowered_types_inverse: RefCell<FxHashMap<vir_poly::Type, vir_high::Type>>,
 
-    // type_invariant_names: RefCell<HashMap<ty::TyKind<'tcx>, String>>,
-    type_invariants: RefCell<HashMap<String, vir_poly::FunctionIdentifier>>,
-    // viper_predicate_descriptions: RefCell<HashMap<String, ViperPredicateDescription>>,
-    viper_predicates: RefCell<HashMap<vir_poly::Type, vir_poly::Predicate>>,
+    // type_invariant_names: RefCell<FxHashMap<ty::TyKind<'tcx>, String>>,
+    type_invariants: RefCell<FxHashMap<String, vir_poly::FunctionIdentifier>>,
+    // viper_predicate_descriptions: RefCell<FxHashMap<String, ViperPredicateDescription>>,
+    viper_predicates: RefCell<FxHashMap<vir_poly::Type, vir_poly::Predicate>>,
 }
 
 // /// All necessary information for encoding a Viper predicate.
@@ -43,6 +49,8 @@ pub(in super::super) trait HighTypeEncoderInterfacePrivate {
         ty: &vir_high::Type,
         constructor: impl FnOnce() -> vir_poly::Type,
     ) -> vir_poly::Type;
+    fn decode_type_mid_into_high(&self, ty: vir_mid::Type)
+        -> SpannedEncodingResult<vir_high::Type>;
 }
 
 impl<'v, 'tcx: 'v> HighTypeEncoderInterfacePrivate for super::super::super::Encoder<'v, 'tcx> {
@@ -63,7 +71,7 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterfacePrivate for super::super::super::Enco
             // FIXME: Change not to use `with_default_span` here.
             let predicates = encoded_type_decl
                 .lower(encoded_type, self)
-                .set_span_with(|| self.get_type_definition_span(encoded_type))?;
+                .set_span_with(|| self.get_type_definition_span_high(encoded_type))?;
             for predicate in predicates {
                 self.log_vir_program_before_viper(predicate.to_string());
                 let predicate_name = predicate.name();
@@ -109,12 +117,18 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterfacePrivate for super::super::super::Enco
             poly_ty
         }
     }
+    fn decode_type_mid_into_high(
+        &self,
+        ty: vir_mid::Type,
+    ) -> SpannedEncodingResult<vir_high::Type> {
+        vir_mid::operations::RestoreHighType::restore_high_type(ty, self)
+    }
 }
 
 pub(crate) trait HighTypeEncoderInterface<'tcx> {
     fn get_used_viper_predicates_map(
         &self,
-    ) -> SpannedEncodingResult<HashMap<vir_poly::Type, vir_poly::Predicate>>;
+    ) -> SpannedEncodingResult<FxHashMap<vir_poly::Type, vir_poly::Predicate>>;
     fn get_viper_predicate(
         &self,
         name: &vir_poly::Type,
@@ -127,7 +141,7 @@ pub(crate) trait HighTypeEncoderInterface<'tcx> {
     fn type_substitution_polymorphic_type_map(
         &self,
         tymap: &SubstMap<'tcx>,
-    ) -> EncodingResult<HashMap<vir_poly::TypeVar, vir_poly::Type>>;
+    ) -> EncodingResult<FxHashMap<vir_poly::TypeVar, vir_poly::Type>>;
     fn encode_type_invariant_use(&self, ty: ty::Ty<'tcx>) -> EncodingResult<String>;
     fn encode_type_invariant_def(
         &self,
@@ -139,14 +153,19 @@ pub(crate) trait HighTypeEncoderInterface<'tcx> {
         invariant_name: &str,
     ) -> EncodingResult<vir_poly::FunctionIdentifier>;
     fn encode_type_bounds(&self, var: &vir_poly::Expr, ty: ty::Ty<'tcx>) -> Vec<vir_poly::Expr>;
+    fn decode_type_mid(&self, ty: &vir_mid::Type) -> SpannedEncodingResult<ty::Ty<'tcx>>;
+    /// If the type is user defined, returns its span. Otherwise, returns the
+    /// default span.
+    fn get_type_definition_span_mid(&self, ty: &vir_mid::Type) -> SpannedEncodingResult<MultiSpan>;
+    fn get_type_decl_mid(&self, ty: &vir_mid::Type) -> SpannedEncodingResult<vir_mid::TypeDecl>;
 }
 
 impl<'v, 'tcx: 'v> HighTypeEncoderInterface<'tcx> for super::super::super::Encoder<'v, 'tcx> {
     fn get_used_viper_predicates_map(
         &self,
-    ) -> SpannedEncodingResult<HashMap<vir_poly::Type, vir_poly::Predicate>> {
+    ) -> SpannedEncodingResult<FxHashMap<vir_poly::Type, vir_poly::Predicate>> {
         // let predicate_names = self.high_type_encoder_state.viper_predicate_descriptions.borrow().keys().map(|key: &String| key.to_owned()).collect::<Vec<String>>();
-        // let mut predicates = HashMap::new();
+        // let mut predicates = FxHashMap::default();
         // for predicate_name in predicate_names {
         //     let predicate = self.get_viper_predicate(&predicate_name)?;
         //     predicates.insert(predicate_name, predicate);
@@ -194,9 +213,8 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterface<'tcx> for super::super::super::Encod
     fn encode_value_field(&self, ty: ty::Ty<'tcx>) -> EncodingResult<vir_poly::Field> {
         // FIXME: This should not be needed:
         self.ensure_type_predicate_encoded(ty)?;
-        let encoded_type = self.encode_type_high(ty)?;
-        let field = super::create_value_field(encoded_type)?.lower(self);
-        Ok(field)
+        let field = self.encode_value_field_high(ty)?;
+        Ok(field.lower(self))
     }
     fn encode_type_predicate_def(&self, ty: ty::Ty<'tcx>) -> EncodingResult<vir_poly::Predicate> {
         let predicate_name = self.encode_type(ty)?;
@@ -238,7 +256,7 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterface<'tcx> for super::super::super::Encod
     fn type_substitution_polymorphic_type_map(
         &self,
         tymap: &SubstMap<'tcx>,
-    ) -> EncodingResult<HashMap<vir_poly::TypeVar, vir_poly::Type>> {
+    ) -> EncodingResult<FxHashMap<vir_poly::TypeVar, vir_poly::Type>> {
         tymap
             .iter()
             .map(|(typ, subst)| {
@@ -254,6 +272,7 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterface<'tcx> for super::super::super::Encod
         trace!("encode_type_invariant_use: {:?}", ty.kind());
         let encoded_type = self.encode_type_high(ty)?;
         let invariant_name = format!("{}$inv", encoded_type);
+        let invariant_name = crate::encoder::encoder::encode_identifier(invariant_name);
         // Trigger encoding of definition.
         // FIXME: This should not be needed.
         self.encode_type_invariant_def_internal(ty, &invariant_name)?;
@@ -289,6 +308,7 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterface<'tcx> for super::super::super::Encod
             let self_local_var = vir_poly::LocalVar::new("self", encoded_type);
             let invariant = vir_poly::Function {
                 name: invariant_name.to_string(),
+                type_arguments: vec![], // FIXME: This is probably wrong.
                 formal_args: vec![self_local_var],
                 return_type: vir_poly::Type::Bool,
                 pres: Vec::new(),
@@ -313,5 +333,18 @@ impl<'v, 'tcx: 'v> HighTypeEncoderInterface<'tcx> for super::super::super::Encod
         } else {
             Vec::new()
         }
+    }
+    fn decode_type_mid(&self, ty: &vir_mid::Type) -> SpannedEncodingResult<ty::Ty<'tcx>> {
+        let high_type = self.decode_type_mid_into_high(ty.clone())?;
+        Ok(self.decode_type_high(&high_type))
+    }
+    fn get_type_definition_span_mid(&self, ty: &vir_mid::Type) -> SpannedEncodingResult<MultiSpan> {
+        let high_type = self.decode_type_mid_into_high(ty.clone())?;
+        Ok(self.get_type_definition_span_high(&high_type))
+    }
+    fn get_type_decl_mid(&self, ty: &vir_mid::Type) -> SpannedEncodingResult<vir_mid::TypeDecl> {
+        let high_type = self.decode_type_mid_into_high(ty.clone())?;
+        let high_type_decl = self.encode_type_def(&high_type)?;
+        high_type_decl.to_middle_type_decl(self)
     }
 }

@@ -4,9 +4,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use rustc_middle::ty;
-use std::collections::HashMap;
-use vir_crate::polymorphic::{self as vir, Expr, Type};
+use rustc_hash::FxHashMap;
+
+use vir_crate::polymorphic::{self as vir, Type};
 
 /// Snapshot of a VIR type. This enum is internal to the snapshot encoding and
 /// should not need to be exposed to the encoder in general.
@@ -15,9 +15,6 @@ use vir_crate::polymorphic::{self as vir, Expr, Type};
 pub(super) enum Snapshot {
     /// Corresponds directly to an existing Viper type.
     Primitive(Type),
-    /// Encodes types with no content; these need not be provided as arguments
-    /// to snapshot constructors.
-    Unit,
     /// Encodes a complex type: tuples, ADTs, or closures.
     Complex {
         predicate_type: Type,
@@ -28,18 +25,20 @@ pub(super) enum Snapshot {
         /// For enums, it has as many entries as there are variants.
         /// The first function is the constructor, the hashmap encodes the
         /// field access functions, keyed by their name.
-        variants: Vec<(vir::DomainFunc, HashMap<String, vir::DomainFunc>)>,
+        variants: Vec<(vir::DomainFunc, FxHashMap<String, vir::DomainFunc>)>,
         /// Mapping of variant names (as used by Prusti) to variant indices
         /// in the [variants] vector. Empty for non-enums.
-        variant_names: HashMap<String, usize>,
+        variant_names: FxHashMap<String, usize>,
     }, // TODO: separate variant for enums and one-variant Complexes?
     /// Arrays
     Array {
         predicate_type: Type,
         _domain: String,
         _snap_func: vir::FunctionIdentifier,
+        _array_collect_func: vir::FunctionIdentifier,
         slice_helper: vir::FunctionIdentifier,
         cons: vir::DomainFunc,
+        uncons: vir::DomainFunc,
         read: vir::DomainFunc,
     },
     /// Slices
@@ -54,6 +53,7 @@ pub(super) enum Snapshot {
         /// result Seq[elem_ty]
         slice_helper: vir::FunctionIdentifier,
         cons: vir::DomainFunc,
+        _uncons: vir::DomainFunc,
         read: vir::DomainFunc,
         len: vir::DomainFunc,
     },
@@ -73,7 +73,6 @@ impl Snapshot {
     pub fn get_type(&self) -> Type {
         match self {
             Self::Primitive(ty) => ty.clone(),
-            Self::Unit => Type::domain(super::encoder::UNIT_DOMAIN_NAME.to_string()),
             Self::Complex { predicate_type, .. }
             | Self::Abstract { predicate_type, .. }
             | Self::Array { predicate_type, .. }
@@ -94,7 +93,7 @@ impl Snapshot {
         use Snapshot::*;
         matches!(
             self,
-            Primitive(_) | Unit | Complex { .. } | Array { .. } | Slice { .. }
+            Primitive(_) | Complex { .. } | Array { .. } | Slice { .. }
         )
     }
 }

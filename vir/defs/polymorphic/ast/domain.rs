@@ -4,8 +4,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::polymorphic::ast::*;
-use std::{collections::HashMap, fmt};
+use crate::{
+    common::{display, identifier::WithIdentifier},
+    polymorphic::ast::*,
+};
+use rustc_hash::FxHashMap;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Domain {
@@ -49,9 +53,10 @@ impl fmt::Display for Domain {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct DomainFunc {
     pub name: String,
+    pub type_arguments: Vec<Type>,
     pub formal_args: Vec<LocalVar>,
     pub return_type: Type,
     pub unique: bool,
@@ -69,7 +74,12 @@ impl fmt::Display for DomainFunc {
         if self.unique {
             write!(f, "unique ")?;
         }
-        write!(f, "function {}(", self.name)?;
+        write!(
+            f,
+            "function {}<{}>(",
+            self.name,
+            display::cjoin(&self.type_arguments)
+        )?;
         let mut first = true;
         for arg in &self.formal_args {
             if !first {
@@ -84,7 +94,12 @@ impl fmt::Display for DomainFunc {
 
 impl WithIdentifier for DomainFunc {
     fn get_identifier(&self) -> String {
-        compute_identifier(&self.name, &self.formal_args, &self.return_type)
+        compute_identifier(
+            &self.name,
+            &self.type_arguments,
+            &self.formal_args,
+            &self.return_type,
+        )
     }
 }
 

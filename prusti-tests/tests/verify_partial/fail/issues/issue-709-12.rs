@@ -1,4 +1,3 @@
-#![no_std]
 extern crate prusti_contracts;
 use prusti_contracts::*;
 
@@ -17,7 +16,7 @@ impl B {
 }
 
 pub fn test(b: &mut B) {
-    //~^ ERROR generating fold-unfold Viper statements failed
+    //~^ ERROR cannot generate fold-unfold Viper statements
     b.get_mut(1)[0] = A(1);
 }
 

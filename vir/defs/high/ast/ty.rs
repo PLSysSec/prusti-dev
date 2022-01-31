@@ -2,15 +2,20 @@ use crate::common::display;
 
 #[derive_helpers]
 #[derive_visitors]
+#[derive(derive_more::IsVariant)]
 pub enum Type {
     /// Mathematical boolean that corresponds to Viper's Bool.
     MBool,
     /// Mathematical integer that corresponds to Viper's Int.
     MInt,
+    /// Mathematical floats that corresponds to Viper's Float.
+    MFloat32,
+    MFloat64,
     /// Rust's Bool allocated on the Viper heap.
     Bool,
     /// Rust's Int allocated on the Viper heap.
     Int(Int),
+    Float(Float),
     TypeVar(TypeVar),
     Tuple(Tuple),
     Struct(Struct),
@@ -45,6 +50,11 @@ pub enum Int {
     Char,
     /// Used for ghost and mathematical integers.
     Unbounded,
+}
+
+pub enum Float {
+    F32,
+    F64,
 }
 
 pub struct TypeVar {

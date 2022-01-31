@@ -4,10 +4,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-mod downcast_detector;
-mod place_encoding;
-
-use crate::encoder::builtin_encoder::BuiltinFunctionKind;
 use crate::encoder::errors::{
     ErrorCtxt, PanicCause, SpannedEncodingError, EncodingError, WithSpan,
     SpannedEncodingResult, EncodingResult
@@ -21,21 +17,18 @@ use prusti_common::config;
 use rustc_target::abi;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir, ty};
-use rustc_index::vec::{Idx, IndexVec};
+use rustc_index::vec::IndexVec;
 use rustc_span::{Span, DUMMY_SP};
 use log::{trace, debug};
-use std::{
-    collections::HashMap,
-    convert::TryInto,
-};
 use prusti_interface::environment::mir_utils::MirPlace;
 use crate::encoder::mir::types::MirTypeEncoderInterface;
-
-use downcast_detector::detect_downcasts;
-pub use place_encoding::{PlaceEncoding, ExprOrArrayBase};
-
 use super::encoder::SubstMap;
 use super::high::types::HighTypeEncoderInterface;
+
+mod downcast_detector;
+mod place_encoding;
+
+pub use place_encoding::{PlaceEncoding, ExprOrArrayBase};
 
 pub static PRECONDITION_LABEL: &str = "pre";
 pub static WAND_LHS_LABEL: &str = "lhs";
@@ -50,6 +43,15 @@ pub trait PlaceEncoder<'v, 'tcx: 'v> {
 
     fn encode_local_var_name(&self, local: mir::Local) -> String {
         format!("{:?}", local)
+    }
+
+    fn encode_local_high(&self, local: mir::Local) -> SpannedEncodingResult<vir_crate::high::VariableDecl> {
+        let var_name = self.encode_local_var_name(local);
+        let typ = self
+            .encoder()
+            .encode_type_high(self.get_local_ty(local))
+            .with_span(self.get_local_span(local))?;
+        Ok(vir_crate::high::VariableDecl::new(var_name, typ))
     }
 
     fn encode_local(&self, local: mir::Local) -> SpannedEncodingResult<vir::LocalVar> {
@@ -134,7 +136,7 @@ pub trait PlaceEncoder<'v, 'tcx: 'v> {
                         let tcx = self.encoder().env().tcx();
                         let variant_def = &adt_def.variants[variant_index.into()];
                         let encoded_variant = if num_variants != 1 {
-                            encoded_base.variant(&variant_def.ident.as_str())
+                            encoded_base.variant(variant_def.ident(tcx).as_str())
                         } else {
                             encoded_base
                         };
@@ -148,7 +150,7 @@ pub trait PlaceEncoder<'v, 'tcx: 'v> {
                         let encoded_field = self
                             .encoder()
                             .encode_struct_field(
-                                &field.ident.as_str(),
+                                field.ident(tcx).as_str(),
                                 field_ty
                             )?;
                         let encoded_projection = encoded_variant.field(encoded_field);
@@ -630,7 +632,15 @@ impl<'p, 'v: 'p, 'tcx: 'v> MirEncoder<'p, 'v, 'tcx> {
                         vir::Expr::lt_cmp(result.clone(), std::isize::MIN.into()),
                         vir::Expr::gt_cmp(result, std::isize::MAX.into()),
                     ),
-
+                    //Floats
+                    ty::TyKind::Float(ty::FloatTy::F32) => vir::Expr::or(
+                        vir::Expr::lt_cmp(result.clone(), std::f32::MIN.into()),
+                        vir::Expr::gt_cmp(result, std::f32::MAX.into()),
+                    ),
+                    ty::TyKind::Float(ty::FloatTy::F64) => vir::Expr::or(
+                        vir::Expr::lt_cmp(result.clone(), std::f64::MIN.into()),
+                        vir::Expr::gt_cmp(result, std::f64::MAX.into()),
+                    ),
                     _ => {
                         return Err(EncodingError::unsupported(format!(
                             "overflow checks are unsupported for operation '{:?}' on type '{:?}'",
@@ -730,6 +740,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> MirEncoder<'p, 'v, 'tcx> {
                     let return_type = self.encoder.encode_snapshot_type(dst_ty, tymap).with_span(span)?;
                     return Ok(vir::Expr::func_app(
                         function_name,
+                        vec![], // FIXME: This is probably wrong.
                         encoded_args,
                         formal_args,
                         return_type,
@@ -789,7 +800,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> MirEncoder<'p, 'v, 'tcx> {
     }
 
     pub fn get_downcasts_at_location(&self, location: mir::Location) -> Vec<(MirPlace<'tcx>, abi::VariantIdx)> {
-        detect_downcasts(self.mir, location)
+        downcast_detector::detect_downcasts(self.mir, location)
     }
 
     pub fn get_span_of_basic_block(&self, bbi: mir::BasicBlock) -> Span {
@@ -804,8 +815,8 @@ impl<'p, 'v: 'p, 'tcx: 'v> MirEncoder<'p, 'v, 'tcx> {
     }
 
     /// Return the cause of a call to `begin_panic`
-    pub fn encode_panic_cause(&self, source_info: mir::SourceInfo) -> PanicCause {
-        let macro_backtrace: Vec<_> = source_info.span.macro_backtrace().collect();
+    pub fn encode_panic_cause(&self, span: Span) -> PanicCause {
+        let macro_backtrace: Vec<_> = span.macro_backtrace().collect();
         debug!("macro_backtrace: {:?}", macro_backtrace);
 
         // To classify the cause of the panic it's enough to look at the top 3 macro calls
@@ -813,8 +824,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> MirEncoder<'p, 'v, 'tcx> {
         let tcx = self.encoder.env().tcx();
         let macro_names: Vec<String> = macro_backtrace.iter()
             .take(lookup_size)
-            .map(|x| x.macro_def_id.map(|y| tcx.def_path_str(y)))
-            .flatten()
+            .filter_map(|x| x.macro_def_id.map(|y| tcx.def_path_str(y)))
             .collect();
         debug!("macro_names: {:?}", macro_names);
 
@@ -823,7 +833,9 @@ impl<'p, 'v: 'p, 'tcx: 'v> MirEncoder<'p, 'v, 'tcx> {
             .collect();
         match &macro_names_str[..] {
             ["core::panic::panic_2015", "core::macros::panic", "std::unimplemented"] => PanicCause::Unimplemented,
+            ["std::unimplemented", ..] => PanicCause::Unimplemented,
             ["core::panic::panic_2015", "core::macros::panic", "std::unreachable"] => PanicCause::Unreachable,
+            ["std::unreachable", ..] => PanicCause::Unreachable,
             ["std::assert", "std::debug_assert", ..] => PanicCause::DebugAssert,
             ["std::assert", ..] => PanicCause::Assert,
             ["std::panic::panic_2015", "std::panic", "std::debug_assert"] => PanicCause::DebugAssert,

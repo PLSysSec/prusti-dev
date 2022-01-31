@@ -4,11 +4,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::config;
 use crate::vir::polymorphic_vir as vir;
 use std::collections::HashMap;
 use std::mem;
 use log::debug;
+use itertools::Itertools;
 
 /// Optimizations currently done:
 ///
@@ -102,7 +102,7 @@ impl vir::ExprFolder for Optimizer {
         });
 
         if *replacer.counter > old_counter {
-            for (expr, variable) in replacer.map {
+            for (expr, variable) in replacer.map.into_iter().sorted() {
                 forall = vir::Expr::LetExpr( vir::LetExpr {
                     variable,
                     def: box expr,

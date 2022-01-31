@@ -4,46 +4,31 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::{converter::type_substitution::Generic, polymorphic::ast::*};
+use crate::{
+    common::identifier::WithIdentifier, converter::type_substitution::Generic, polymorphic::ast::*,
+};
+use rustc_hash::FxHashMap;
 use std::{
     cmp::Ordering,
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::hash_map::DefaultHasher,
     fmt,
     hash::{Hash, Hasher},
     mem::discriminant,
 };
 
-pub trait WithIdentifier {
-    fn get_identifier(&self) -> String;
-}
-
 /// The identifier of a statement. Used in error reporting.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// TODO: This should probably have custom `PartialEq, Eq, Hash, PartialOrd, Ord` impls,
+/// to ensure that it is not included in these calculations.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Position {
-    line: i32,
-    column: i32,
-    id: u64,
+    pub(crate) line: i32,
+    pub(crate) column: i32,
+    pub(crate) id: u64,
 }
 
 impl Position {
     pub fn new(line: i32, column: i32, id: u64) -> Self {
         Position { line, column, id }
-    }
-
-    pub fn line(&self) -> i32 {
-        self.line
-    }
-
-    pub fn column(&self) -> i32 {
-        self.column
-    }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.line == 0 && self.column == 0 && self.id == 0
     }
 }
 
@@ -129,10 +114,17 @@ impl Ord for PermAmount {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Float {
+    F32,
+    F64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Type {
     Int,
     Bool,
+    Float(Float),
     Seq(SeqType),
     //Ref, // At the moment we don't need this
     /// TypedRef: the first parameter is the name of the predicate that encodes the type
@@ -148,6 +140,8 @@ impl fmt::Display for Type {
         match self {
             Type::Int => write!(f, "Int"),
             Type::Bool => write!(f, "Bool"),
+            Type::Float(Float::F32) => write!(f, "F32"),
+            Type::Float(Float::F64) => write!(f, "F64"),
             Type::Seq(seq) => seq.fmt(f),
             Type::TypedRef(_) => write!(f, "Ref({})", self.encode_as_string()),
             Type::Domain(_) => write!(f, "Domain({})", self.encode_as_string()),
@@ -191,6 +185,8 @@ impl Type {
         match self {
             Type::Bool => "bool".to_string(),
             Type::Int => "int".to_string(),
+            Type::Float(Float::F32) => "f32".to_string(),
+            Type::Float(Float::F64) => "f64".to_string(),
             Type::Domain(_) | Type::Snapshot(_) | Type::TypedRef(_) | Type::TypeVar(_) => {
                 self.encode_as_string()
             }
@@ -199,6 +195,7 @@ impl Type {
     }
 
     /// Construct a new VIR type that corresponds to an enum variant.
+    #[must_use]
     pub fn variant(self, variant: &str) -> Self {
         match self {
             Type::TypedRef(mut typed_ref) => {
@@ -210,7 +207,8 @@ impl Type {
     }
 
     /// Replace all generic types with their instantiations by using string substitution.
-    pub fn patch(self, substs: &HashMap<TypeVar, Type>) -> Self {
+    #[must_use]
+    pub fn patch(self, substs: &FxHashMap<TypeVar, Type>) -> Self {
         self.substitute(substs)
     }
 
@@ -263,6 +261,7 @@ impl Type {
     }
 
     // TODO: this is a temporary solution for converting the encoded type in type encoder as a snapshot variant, which ould be cleaner
+    #[must_use]
     pub fn convert_to_snapshot(&self) -> Self {
         match self {
             Type::TypedRef(typed_ref) => Type::Snapshot(typed_ref.clone().into()),
@@ -291,6 +290,7 @@ impl Type {
         match self {
             Type::Bool => TypeId::Bool,
             Type::Int => TypeId::Int,
+            Type::Float(_) => TypeId::Float,
             Type::TypedRef(_) => TypeId::Ref,
             Type::Domain(_) => TypeId::Domain,
             Type::Snapshot(_) => TypeId::Snapshot,
@@ -402,7 +402,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct SeqType {
     pub typ: Box<Type>,
 }
@@ -427,7 +427,7 @@ impl fmt::Display for SeqType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct TypedRef {
     pub label: String,
     pub arguments: Vec<Type>,
@@ -469,7 +469,7 @@ impl From<SnapshotType> for TypedRef {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct DomainType {
     pub label: String,
     pub arguments: Vec<Type>,
@@ -510,7 +510,7 @@ impl From<TypeVar> for DomainType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct SnapshotType {
     pub label: String,
     pub arguments: Vec<Type>,
@@ -551,7 +551,7 @@ impl From<TypeVar> for SnapshotType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeVar {
     pub label: String,
 }
@@ -562,17 +562,18 @@ impl fmt::Display for TypeVar {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TypeId {
     Int,
     Bool,
+    Float,
     Ref,
     Seq,
     Domain,
     Snapshot,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct LocalVar {
     pub name: String,
     pub typ: Type,
@@ -599,7 +600,7 @@ impl LocalVar {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Field {
     pub name: String,
     pub typ: Type,

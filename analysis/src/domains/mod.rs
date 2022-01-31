@@ -4,11 +4,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+mod definitely_accessible;
 mod definitely_initialized;
-mod pcs;
-mod place_utils;
+mod framing;
+mod maybe_borrowed;
 mod reaching_definitions;
 
+pub use definitely_accessible::*;
 pub use definitely_initialized::*;
-pub use pcs::*;
+pub use framing::*;
+pub use maybe_borrowed::*;
 pub use reaching_definitions::*;

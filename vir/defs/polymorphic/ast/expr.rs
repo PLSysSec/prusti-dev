@@ -5,16 +5,16 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use super::super::borrows::Borrow;
-use crate::{converter::type_substitution::Generic, polymorphic::ast::*};
+use crate::{common::display, converter::type_substitution::Generic, polymorphic::ast::*};
+use rustc_hash::FxHashMap;
 use std::{
-    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
     mem,
     mem::discriminant,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Expr {
     /// A local var
     Local(Local),
@@ -127,6 +127,7 @@ impl Expr {
         }
     }
 
+    #[must_use]
     pub fn set_pos(self, position: Position) -> Self {
         match self {
             Expr::Local(Local { variable, .. }) => Expr::Local(Local { variable, position }),
@@ -265,12 +266,14 @@ impl Expr {
             }),
             Expr::FuncApp(FuncApp {
                 function_name,
+                type_arguments,
                 arguments,
                 formal_arguments,
                 return_type,
                 ..
             }) => Expr::FuncApp(FuncApp {
                 function_name,
+                type_arguments,
                 arguments,
                 formal_arguments,
                 return_type,
@@ -324,6 +327,7 @@ impl Expr {
     }
 
     // Replace all Position::default() positions with `pos`
+    #[must_use]
     pub fn set_default_pos(self, pos: Position) -> Self {
         struct DefaultPosReplacer {
             new_pos: Position,
@@ -404,7 +408,7 @@ impl Expr {
 
     pub fn gt_cmp(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::GtCmp,
+            op_kind: BinaryOpKind::GtCmp,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -413,7 +417,7 @@ impl Expr {
 
     pub fn ge_cmp(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::GeCmp,
+            op_kind: BinaryOpKind::GeCmp,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -422,7 +426,7 @@ impl Expr {
 
     pub fn lt_cmp(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::LtCmp,
+            op_kind: BinaryOpKind::LtCmp,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -431,7 +435,7 @@ impl Expr {
 
     pub fn le_cmp(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::LeCmp,
+            op_kind: BinaryOpKind::LeCmp,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -440,7 +444,7 @@ impl Expr {
 
     pub fn eq_cmp(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::EqCmp,
+            op_kind: BinaryOpKind::EqCmp,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -454,7 +458,7 @@ impl Expr {
     #[allow(clippy::should_implement_trait)]
     pub fn add(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Add,
+            op_kind: BinaryOpKind::Add,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -464,7 +468,7 @@ impl Expr {
     #[allow(clippy::should_implement_trait)]
     pub fn sub(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Sub,
+            op_kind: BinaryOpKind::Sub,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -474,7 +478,7 @@ impl Expr {
     #[allow(clippy::should_implement_trait)]
     pub fn mul(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Mul,
+            op_kind: BinaryOpKind::Mul,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -484,7 +488,7 @@ impl Expr {
     #[allow(clippy::should_implement_trait)]
     pub fn div(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Div,
+            op_kind: BinaryOpKind::Div,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -493,7 +497,7 @@ impl Expr {
 
     pub fn modulo(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Mod,
+            op_kind: BinaryOpKind::Mod,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -522,7 +526,7 @@ impl Expr {
 
     pub fn and(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::And,
+            op_kind: BinaryOpKind::And,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -531,7 +535,7 @@ impl Expr {
 
     pub fn or(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Or,
+            op_kind: BinaryOpKind::Or,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -544,7 +548,7 @@ impl Expr {
 
     pub fn implies(left: Expr, right: Expr) -> Self {
         Expr::BinOp(BinOp {
-            op_kind: BinOpKind::Implies,
+            op_kind: BinaryOpKind::Implies,
             left: Box::new(left),
             right: Box::new(right),
             position: Position::default(),
@@ -637,6 +641,7 @@ impl Expr {
 
     pub fn func_app(
         name: String,
+        type_arguments: Vec<Type>,
         args: Vec<Expr>,
         internal_args: Vec<LocalVar>,
         return_type: Type,
@@ -644,6 +649,7 @@ impl Expr {
     ) -> Self {
         Expr::FuncApp(FuncApp {
             function_name: name,
+            type_arguments,
             arguments: args,
             formal_arguments: internal_args,
             return_type,
@@ -762,6 +768,7 @@ impl Expr {
     }
 
     /// Reconstruct place from the place components.
+    #[must_use]
     pub fn reconstruct_place(self, components: Vec<PlaceComponent>) -> Expr {
         components
             .into_iter()
@@ -792,6 +799,7 @@ impl Expr {
         Expr::Local(Local { variable, position })
     }
 
+    #[must_use]
     pub fn variant(self, index: &str) -> Self {
         assert!(self.is_place());
         let field_name = format!("enum_{}", index);
@@ -804,6 +812,7 @@ impl Expr {
         })
     }
 
+    #[must_use]
     pub fn field(self, field: Field) -> Self {
         Expr::Field(FieldExpr {
             base: Box::new(self),
@@ -812,6 +821,7 @@ impl Expr {
         })
     }
 
+    #[must_use]
     pub fn addr_of(self) -> Self {
         let addr_type = self.get_type().clone();
         Expr::AddrOf(AddrOf {
@@ -825,7 +835,7 @@ impl Expr {
         match self {
             Expr::PredicateAccessPredicate(..) | Expr::FieldAccessPredicate(..) => true,
             Expr::BinOp(BinOp {
-                op_kind: BinOpKind::And,
+                op_kind: BinaryOpKind::And,
                 left,
                 right,
                 ..
@@ -937,6 +947,7 @@ impl Expr {
     }
 
     /// Puts an `old[label](..)` around the expression
+    #[must_use]
     pub fn old<S: fmt::Display + ToString>(self, label: S) -> Self {
         match self {
             Expr::Local(..) => {
@@ -1019,6 +1030,7 @@ impl Expr {
     }
 
     /// Remove access predicates.
+    #[must_use]
     pub fn purify(self) -> Self {
         struct Purifier;
         impl ExprFolder for Purifier {
@@ -1163,6 +1175,8 @@ impl Expr {
             Expr::Const(ConstExpr { value, .. }) => match value {
                 Const::Bool(..) => &Type::Bool,
                 Const::Int(..) | Const::BigInt(..) => &Type::Int,
+                Const::Float(FloatConst::F32(..)) => &Type::Float(Float::F32),
+                Const::Float(FloatConst::F64(..)) => &Type::Float(Float::F64),
                 Const::FnPtr => &FN_PTR_TYPE,
             },
             Expr::BinOp(BinOp {
@@ -1171,20 +1185,20 @@ impl Expr {
                 right,
                 ..
             }) => match op_kind {
-                BinOpKind::EqCmp
-                | BinOpKind::NeCmp
-                | BinOpKind::GtCmp
-                | BinOpKind::GeCmp
-                | BinOpKind::LtCmp
-                | BinOpKind::LeCmp
-                | BinOpKind::And
-                | BinOpKind::Or
-                | BinOpKind::Implies => &Type::Bool,
-                BinOpKind::Add
-                | BinOpKind::Sub
-                | BinOpKind::Mul
-                | BinOpKind::Div
-                | BinOpKind::Mod => {
+                BinaryOpKind::EqCmp
+                | BinaryOpKind::NeCmp
+                | BinaryOpKind::GtCmp
+                | BinaryOpKind::GeCmp
+                | BinaryOpKind::LtCmp
+                | BinaryOpKind::LeCmp
+                | BinaryOpKind::And
+                | BinaryOpKind::Or
+                | BinaryOpKind::Implies => &Type::Bool,
+                BinaryOpKind::Add
+                | BinaryOpKind::Sub
+                | BinaryOpKind::Mul
+                | BinaryOpKind::Div
+                | BinaryOpKind::Mod => {
                     let typ1 = left.get_type();
                     let typ2 = right.get_type();
                     assert_eq!(typ1, typ2, "expr: {:?}", self);
@@ -1247,7 +1261,7 @@ impl Expr {
                 | Expr::ForAll(..)
                 | Expr::Exists(..) => true,
                 Expr::BinOp(BinOp { op_kind, .. }) => {
-                    use self::BinOpKind::*;
+                    use self::BinaryOpKind::*;
                     *op_kind == EqCmp
                         || *op_kind == NeCmp
                         || *op_kind == GtCmp
@@ -1270,6 +1284,7 @@ impl Expr {
         }
     }
 
+    #[must_use]
     pub fn negate(self) -> Self {
         if let Expr::UnaryOp(UnaryOp {
             op_kind: UnaryOpKind::Not,
@@ -1283,6 +1298,7 @@ impl Expr {
         }
     }
 
+    #[must_use]
     pub fn map_labels<F>(self, f: F) -> Self
     where
         F: Fn(String) -> Option<String>,
@@ -1309,6 +1325,7 @@ impl Expr {
     }
 
     /// Simplify `Deref(AddrOf(P))` to `P`.
+    #[must_use]
     pub fn simplify_addr_of(self) -> Self {
         struct Simplifier;
         impl ExprFolder for Simplifier {
@@ -1340,6 +1357,7 @@ impl Expr {
     }
 
     // TODO polymorphic: convert following 2 functions after type substitution is updated
+    #[must_use]
     pub fn replace_place(self, target: &Expr, replacement: &Expr) -> Self {
         // TODO: disabled for snapshot patching
         /*
@@ -1449,6 +1467,7 @@ impl Expr {
         .fold(self)
     }
 
+    #[must_use]
     pub fn replace_multiple_places(self, replacements: &[(Expr, Expr)]) -> Self {
         // TODO: disabled for snapshot patching
         /*
@@ -1572,6 +1591,7 @@ impl Expr {
 
     /// Replaces expressions like `old[l5](old[l5](_9.val_ref).foo.bar)`
     /// into `old[l5](_9.val_ref.foo.bar)`
+    #[must_use]
     pub fn remove_redundant_old(self) -> Self {
         struct RedundantOldRemover {
             current_label: Option<String>,
@@ -1603,6 +1623,7 @@ impl Expr {
     }
 
     /// Leaves a conjunction of `acc(..)` expressions
+    #[must_use]
     pub fn filter_perm_conjunction(self) -> Self {
         struct PermConjunctionFilter();
         impl ExprFolder for PermConjunctionFilter {
@@ -1611,12 +1632,12 @@ impl Expr {
                     f @ Expr::PredicateAccessPredicate(..) => f,
                     f @ Expr::FieldAccessPredicate(..) => f,
                     Expr::BinOp(BinOp {
-                        op_kind: BinOpKind::And,
+                        op_kind: BinaryOpKind::And,
                         left,
                         right,
                         position,
                     }) => self.fold_bin_op(BinOp {
-                        op_kind: BinOpKind::And,
+                        op_kind: BinaryOpKind::And,
                         left,
                         right,
                         position,
@@ -1719,9 +1740,10 @@ impl Expr {
     // TODO: update this after type substitution is in place
     // /// Replace all generic types with their instantiations by using string substitution.
     // /// FIXME: this is a hack to support generics. See issue #187.
-    pub fn patch_types(self, substs: &HashMap<TypeVar, Type>) -> Self {
+    #[must_use]
+    pub fn patch_types(self, substs: &FxHashMap<TypeVar, Type>) -> Self {
         struct TypePatcher<'a> {
-            substs: &'a HashMap<TypeVar, Type>,
+            substs: &'a FxHashMap<TypeVar, Type>,
         }
         impl<'a> ExprFolder for TypePatcher<'a> {
             fn fold_predicate_access_predicate(
@@ -1771,6 +1793,7 @@ impl Expr {
                 &mut self,
                 FuncApp {
                     function_name,
+                    type_arguments,
                     arguments,
                     formal_arguments,
                     return_type,
@@ -1788,6 +1811,7 @@ impl Expr {
                 // generic values.
                 Expr::FuncApp(FuncApp {
                     function_name,
+                    type_arguments,
                     arguments: arguments.into_iter().map(|e| self.fold(e)).collect(),
                     formal_arguments,
                     return_type,
@@ -1812,6 +1836,7 @@ impl Expr {
     /// Remove read permissions. For example, if the expression is
     /// `acc(x.f, read) && acc(P(x.f), write)`, then after the
     /// transformation it will be: `acc(P(x.f), write)`.
+    #[must_use]
     pub fn remove_read_permissions(self) -> Self {
         struct ReadPermRemover {}
         impl ExprFolder for ReadPermRemover {
@@ -1868,14 +1893,14 @@ pub enum PlaceComponent {
     Variant(Field, Position),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum UnaryOpKind {
     Not,
     Minus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BinOpKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+pub enum BinaryOpKind {
     EqCmp,
     NeCmp,
     GtCmp,
@@ -1892,25 +1917,38 @@ pub enum BinOpKind {
     Implies,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum ContainerOpKind {
     SeqIndex,
     SeqConcat,
     SeqLen,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+pub enum FloatConst {
+    F32(u32),
+    F64(u64),
+}
+
+impl fmt::Display for FloatConst {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", &self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum Const {
     Bool(bool),
     Int(i64),
     BigInt(String),
+    Float(FloatConst),
     /// All function pointers share the same constant, because their function
     /// is determined by the type system.
     FnPtr,
 }
 
 /// Individual structs for different cases of Expr
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Local {
     pub variable: LocalVar,
     pub position: Position,
@@ -1934,7 +1972,7 @@ impl Hash for Local {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Variant {
     pub base: Box<Expr>,
     pub variant_index: Field,
@@ -1959,7 +1997,7 @@ impl Hash for Variant {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct FieldExpr {
     pub base: Box<Expr>,
     pub field: Field,
@@ -1984,7 +2022,7 @@ impl Hash for FieldExpr {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct AddrOf {
     pub base: Box<Expr>,
     pub addr_type: Type,
@@ -2009,7 +2047,7 @@ impl Hash for AddrOf {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct LabelledOld {
     pub label: String,
     pub base: Box<Expr>,
@@ -2034,7 +2072,7 @@ impl Hash for LabelledOld {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct ConstExpr {
     pub value: Const,
     pub position: Position,
@@ -2058,7 +2096,7 @@ impl Hash for ConstExpr {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct MagicWand {
     pub left: Box<Expr>,
     pub right: Box<Expr>,
@@ -2088,7 +2126,7 @@ impl Hash for MagicWand {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct PredicateAccessPredicate {
     pub predicate_type: Type,
     pub argument: Box<Expr>,
@@ -2121,7 +2159,7 @@ impl Hash for PredicateAccessPredicate {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct FieldAccessPredicate {
     pub base: Box<Expr>,
     pub permission: PermAmount,
@@ -2146,7 +2184,7 @@ impl Hash for FieldAccessPredicate {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct UnaryOp {
     pub op_kind: UnaryOpKind,
     pub argument: Box<Expr>,
@@ -2171,9 +2209,9 @@ impl Hash for UnaryOp {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct BinOp {
-    pub op_kind: BinOpKind,
+    pub op_kind: BinaryOpKind,
     pub left: Box<Expr>,
     pub right: Box<Expr>,
     pub position: Position,
@@ -2197,7 +2235,7 @@ impl Hash for BinOp {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct ContainerOp {
     pub op_kind: ContainerOpKind,
     pub left: Box<Expr>,
@@ -2227,7 +2265,7 @@ impl Hash for ContainerOp {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Seq {
     pub typ: Type,
     pub elements: Vec<Expr>,
@@ -2264,7 +2302,7 @@ impl Hash for Seq {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Unfolding {
     pub predicate: Type,
     pub arguments: Vec<Expr>,
@@ -2326,7 +2364,7 @@ impl Hash for Unfolding {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Cond {
     pub guard: Box<Expr>,
     pub then_expr: Box<Expr>,
@@ -2357,7 +2395,7 @@ impl Hash for Cond {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct ForAll {
     pub variables: Vec<LocalVar>,
     pub triggers: Vec<Trigger>,
@@ -2380,7 +2418,7 @@ impl fmt::Display for ForAll {
                 .map(|x| x.to_string())
                 .collect::<Vec<String>>()
                 .join(", "),
-            (&self.body).to_string()
+            self.body
         )
     }
 }
@@ -2398,7 +2436,7 @@ impl Hash for ForAll {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Exists {
     pub variables: Vec<LocalVar>,
     pub triggers: Vec<Trigger>,
@@ -2421,7 +2459,7 @@ impl fmt::Display for Exists {
                 .map(|x| x.to_string())
                 .collect::<Vec<String>>()
                 .join(", "),
-            (&self.body).to_string()
+            self.body
         )
     }
 }
@@ -2439,7 +2477,7 @@ impl Hash for Exists {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct LetExpr {
     pub variable: LocalVar,
     pub def: Box<Expr>,
@@ -2452,9 +2490,7 @@ impl fmt::Display for LetExpr {
         write!(
             f,
             "(let {:?} == ({}) in {})",
-            &self.variable,
-            (&self.def).to_string(),
-            (&self.body).to_string()
+            &self.variable, self.def, self.body
         )
     }
 }
@@ -2471,9 +2507,10 @@ impl Hash for LetExpr {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct FuncApp {
     pub function_name: String,
+    pub type_arguments: Vec<Type>,
     pub arguments: Vec<Expr>,
     pub formal_arguments: Vec<LocalVar>,
     pub return_type: Type,
@@ -2484,36 +2521,32 @@ impl fmt::Display for FuncApp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}<{},{}>({})",
+            "{}<{}>({})",
             &self.function_name,
-            (&self.formal_arguments)
-                .iter()
-                .map(|p| p.typ.to_string())
-                .collect::<Vec<String>>()
-                .join(", "),
-            &(self.return_type).to_string(),
-            &(self.arguments)
-                .iter()
-                .map(|f| f.to_string())
-                .collect::<Vec<String>>()
-                .join(", "),
+            display::cjoin(&self.type_arguments),
+            display::cjoin(&self.arguments),
         )
     }
 }
 
 impl PartialEq for FuncApp {
     fn eq(&self, other: &Self) -> bool {
-        (&self.function_name, &self.arguments) == (&other.function_name, &other.arguments)
+        (&self.function_name, &self.type_arguments, &self.arguments)
+            == (
+                &other.function_name,
+                &other.type_arguments,
+                &other.arguments,
+            )
     }
 }
 
 impl Hash for FuncApp {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&self.function_name, &self.arguments).hash(state);
+        (&self.function_name, &self.type_arguments, &self.arguments).hash(state);
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct DomainFuncApp {
     pub domain_function: DomainFunc,
     pub arguments: Vec<Expr>,
@@ -2524,13 +2557,10 @@ impl fmt::Display for DomainFuncApp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}({})",
+            "{}<{}>({})",
             self.domain_function.name,
-            (&self.arguments)
-                .iter()
-                .map(|f| f.to_string())
-                .collect::<Vec<String>>()
-                .join(", "),
+            display::cjoin(&self.domain_function.type_arguments),
+            display::cjoin(&self.arguments),
         )
     }
 }
@@ -2547,7 +2577,7 @@ impl Hash for DomainFuncApp {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct InhaleExhale {
     pub inhale_expr: Box<Expr>,
     pub exhale_expr: Box<Expr>,
@@ -2572,7 +2602,7 @@ impl Hash for InhaleExhale {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct DowncastExpr {
     pub base: Box<Expr>,
     pub enum_place: Box<Expr>,
@@ -2584,9 +2614,7 @@ impl fmt::Display for DowncastExpr {
         write!(
             f,
             "(downcast {} to {} in {})",
-            (&self.enum_place).to_string(),
-            &self.field,
-            (&self.base).to_string(),
+            self.enum_place, &self.field, self.base,
         )
     }
 }
@@ -2604,7 +2632,7 @@ impl Hash for DowncastExpr {
     }
 }
 
-#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct SnapApp {
     pub base: Box<Expr>,
     pub position: Position,
@@ -2612,7 +2640,7 @@ pub struct SnapApp {
 
 impl fmt::Display for SnapApp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "snap({})", (&*self.base).to_string())
+        write!(f, "snap({})", self.base)
     }
 }
 
@@ -2637,23 +2665,23 @@ impl fmt::Display for UnaryOpKind {
     }
 }
 
-impl fmt::Display for BinOpKind {
+impl fmt::Display for BinaryOpKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BinOpKind::EqCmp => write!(f, "=="),
-            BinOpKind::NeCmp => write!(f, "!="),
-            BinOpKind::GtCmp => write!(f, ">"),
-            BinOpKind::GeCmp => write!(f, ">="),
-            BinOpKind::LtCmp => write!(f, "<"),
-            BinOpKind::LeCmp => write!(f, "<="),
-            BinOpKind::Add => write!(f, "+"),
-            BinOpKind::Sub => write!(f, "-"),
-            BinOpKind::Mul => write!(f, "*"),
-            BinOpKind::Div => write!(f, "\\"),
-            BinOpKind::Mod => write!(f, "%"),
-            BinOpKind::And => write!(f, "&&"),
-            BinOpKind::Or => write!(f, "||"),
-            BinOpKind::Implies => write!(f, "==>"),
+            BinaryOpKind::EqCmp => write!(f, "=="),
+            BinaryOpKind::NeCmp => write!(f, "!="),
+            BinaryOpKind::GtCmp => write!(f, ">"),
+            BinaryOpKind::GeCmp => write!(f, ">="),
+            BinaryOpKind::LtCmp => write!(f, "<"),
+            BinaryOpKind::LeCmp => write!(f, "<="),
+            BinaryOpKind::Add => write!(f, "+"),
+            BinaryOpKind::Sub => write!(f, "-"),
+            BinaryOpKind::Mul => write!(f, "*"),
+            BinaryOpKind::Div => write!(f, "\\"),
+            BinaryOpKind::Mod => write!(f, "%"),
+            BinaryOpKind::And => write!(f, "&&"),
+            BinaryOpKind::Or => write!(f, "||"),
+            BinaryOpKind::Implies => write!(f, "==>"),
         }
     }
 }
@@ -2664,6 +2692,7 @@ impl fmt::Display for Const {
             Const::Bool(val) => write!(f, "{}", val),
             Const::Int(val) => write!(f, "{}", val),
             Const::BigInt(ref val) => write!(f, "{}", val),
+            Const::Float(val) => write!(f, "{:?}", val),
             Const::FnPtr => write!(f, "FnPtr"),
         }
     }

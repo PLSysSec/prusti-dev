@@ -2,7 +2,7 @@ use super::encoder::SnapshotEncoder;
 use crate::encoder::{encoder::SubstMap, errors::EncodingResult};
 use rustc_middle::{mir, ty};
 use std::{cell::RefCell, rc::Rc};
-use vir_crate::{high as vir_high, polymorphic as vir_poly};
+use vir_crate::polymorphic as vir_poly;
 
 #[derive(Default)]
 pub(crate) struct SnapshotEncoderState {
@@ -49,6 +49,12 @@ pub(crate) trait SnapshotEncoderInterface<'tcx> {
         &self,
         ty: ty::Ty<'tcx>,
         variant: Option<usize>,
+        args: Vec<vir_poly::Expr>,
+        tymap: &SubstMap<'tcx>,
+    ) -> EncodingResult<vir_poly::Expr>;
+    fn encode_snapshot_destructor(
+        &self,
+        ty: ty::Ty<'tcx>,
         args: Vec<vir_poly::Expr>,
         tymap: &SubstMap<'tcx>,
     ) -> EncodingResult<vir_poly::Expr>;
@@ -182,7 +188,7 @@ impl<'v, 'tcx: 'v> SnapshotEncoderInterface<'tcx> for super::super::Encoder<'v, 
                 vec![self.encode_const_expr(expr.ty(), &const_val)?]
             }
         };
-        self.encode_snapshot(expr.ty(), None, args, &SubstMap::new())
+        self.encode_snapshot(expr.ty(), None, args, &SubstMap::default())
     }
 
     /// Constructs a snapshot. The `variant` is needed only if `ty` is an enum.
@@ -198,6 +204,18 @@ impl<'v, 'tcx: 'v> SnapshotEncoderInterface<'tcx> for super::super::Encoder<'v, 
             .encoder
             .borrow_mut()
             .encode_constructor(self, ty, variant, args, tymap)
+    }
+
+    fn encode_snapshot_destructor(
+        &self,
+        ty: ty::Ty<'tcx>,
+        args: Vec<vir_poly::Expr>,
+        tymap: &SubstMap<'tcx>,
+    ) -> EncodingResult<vir_poly::Expr> {
+        self.snapshot_encoder_state
+            .encoder
+            .borrow_mut()
+            .encode_destructor(self, ty, args, tymap)
     }
 
     fn encode_snapshot_array_idx(

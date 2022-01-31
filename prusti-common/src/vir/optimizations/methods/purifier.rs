@@ -15,7 +15,6 @@ use crate::config;
 use std::collections::{HashMap, HashSet};
 use std::{self, mem};
 use prusti_utils::force_matches;
-use vir::polymorphic::PredicateAccessPredicate;
 
 /// Purify vars.
 pub fn purify_vars(mut method: cfg::CfgMethod) -> cfg::CfgMethod {
@@ -369,6 +368,8 @@ impl ast::StmtFolder for VarPurifier {
                 method_name = match replacement.typ {
                 ast::Type::Int => "builtin$havoc_int",
                 ast::Type::Bool => "builtin$havoc_bool",
+                ast::Type::Float(ast::Float::F32) => "builtin$havoc_f32",
+                ast::Type::Float(ast::Float::F64) => "builtin$havoc_f64",
                 ast::Type::TypedRef(_) => "builtin$havoc_ref",
                 ast::Type::TypeVar(_) => "builtin$havoc_ref",
                 ast::Type::Domain(_)

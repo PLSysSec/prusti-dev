@@ -13,6 +13,7 @@ use crate::legacy::ast::*;
 
 impl Expr {
     /// Apply the closure to all places in the expression.
+    #[must_use]
     pub fn fold_places<F>(self, f: F) -> Expr
     where
         F: Fn(Expr) -> Expr,
@@ -40,6 +41,7 @@ impl Expr {
     }
 
     /// Apply the closure to all expressions.
+    #[must_use]
     pub fn fold_expr<F>(self, f: F) -> Expr
     where
         F: Fn(Expr) -> Expr,
@@ -122,7 +124,7 @@ pub trait ExprFolder: Sized {
     }
     fn fold_bin_op(
         &mut self,
-        kind: BinOpKind,
+        kind: BinaryOpKind,
         first: Box<Expr>,
         second: Box<Expr>,
         pos: Position,
@@ -354,7 +356,7 @@ pub trait ExprWalker: Sized {
     fn walk_unary_op(&mut self, _op: UnaryOpKind, arg: &Expr, _pos: &Position) {
         self.walk(arg)
     }
-    fn walk_bin_op(&mut self, _op: BinOpKind, arg1: &Expr, arg2: &Expr, _pos: &Position) {
+    fn walk_bin_op(&mut self, _op: BinaryOpKind, arg1: &Expr, arg2: &Expr, _pos: &Position) {
         self.walk(arg1);
         self.walk(arg2);
     }
@@ -611,7 +613,7 @@ pub trait FallibleExprFolder: Sized {
     }
     fn fallible_fold_bin_op(
         &mut self,
-        kind: BinOpKind,
+        kind: BinaryOpKind,
         first: Box<Expr>,
         second: Box<Expr>,
         pos: Position,

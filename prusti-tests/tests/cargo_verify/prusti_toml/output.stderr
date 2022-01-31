@@ -1,5 +1,3 @@
-    Checking prusti-contracts v0.1.0 ([..])
-    Checking prusti_toml v0.1.0 ([..])
 error: [Prusti: verification error] postcondition might not hold.
  --> src/lib.rs:3:11
   |
@@ -16,7 +14,7 @@ error: [Prusti: verification error] the asserted expression might not hold
  --> src/lib.rs:7:5
   |
 7 |     assert!(false);
-  |     ^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^
   |
   = note: this error originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
 

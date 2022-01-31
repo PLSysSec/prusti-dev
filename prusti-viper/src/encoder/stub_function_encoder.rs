@@ -4,6 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+use crate::encoder::high::generics::HighGenericsEncoderInterface;
 use crate::encoder::high::types::HighTypeEncoderInterface;
 use crate::encoder::mir_encoder::{MirEncoder, PlaceEncoder};
 use crate::encoder::Encoder;
@@ -12,11 +13,11 @@ use vir_crate::polymorphic as vir;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
 use log::{trace, debug};
-use crate::encoder::errors::SpannedEncodingError;
+
 use crate::encoder::errors::WithSpan;
-use crate::encoder::errors::EncodingResult;
+
 use crate::encoder::errors::SpannedEncodingResult;
-use crate::encoder::mir::types::MirTypeEncoderInterface;
+
 
 use super::encoder::SubstMap;
 
@@ -65,10 +66,13 @@ impl<'p, 'v: 'p, 'tcx: 'v> StubFunctionEncoder<'p, 'v, 'tcx> {
             .collect::<Result<_, _>>()
             .with_span(self.mir.span)?;
 
+        let type_arguments = self.encoder.encode_generic_arguments(self.proc_def_id, self.tymap).with_span(self.mir.span)?;
+
         let return_type = self.encode_function_return_type()?;
 
         let function = vir::Function {
             name: function_name,
+            type_arguments,
             formal_args,
             return_type,
             pres: vec![false.into()],

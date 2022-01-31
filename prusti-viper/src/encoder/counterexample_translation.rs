@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use std::convert::TryFrom;
+use rustc_hash::{FxHashMap};
+
 
 use viper::silicon_counterexample::*;
-use viper::VerificationError;
+
 use prusti_interface::data::ProcedureDefId;
 use crate::encoder::Encoder;
-use crate::encoder::places::{Local, LocalVariableManager, Place};
+use crate::encoder::places::{Local, LocalVariableManager};
 use crate::encoder::counterexample::*;
 
 use rustc_middle::mir::{self, VarDebugInfo};
-use rustc_middle::ty::{self, Ty, AdtKind, AdtDef, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 pub fn backtranslate(
@@ -47,8 +47,8 @@ pub fn backtranslate(
     let (result_sil_name, result_span, result_typ) = translator.result_to_process();
 
     // map those needed
-    let mut entries = HashMap::new();
-    let mut args = HashMap::new();
+    let mut entries = FxHashMap::default();
+    let mut args = FxHashMap::default();
 
     for (rust_name, span, vir_name, typ, is_arg) in entries_to_process {
         if !translator.is_pure {
@@ -117,7 +117,7 @@ pub struct CounterexampleTranslator<'ce, 'tcx> {
     silicon_counterexample: &'ce SiliconCounterexample,
     tcx: TyCtxt<'tcx>,
     is_pure: bool,
-    disc_info: HashMap<(ProcedureDefId, String), Vec<String>>,
+    disc_info: FxHashMap<(ProcedureDefId, String), Vec<String>>,
     var_debug_info: Vec<VarDebugInfo<'tcx>>,
     local_variable_manager: LocalVariableManager<'tcx>,
 }
@@ -212,7 +212,7 @@ impl<'ce, 'tcx> CounterexampleTranslator<'ce, 'tcx> {
         typ: Ty<'tcx>,
         sil_entry: Option<&ModelEntry>,
         vir_name: String,
-        silicon_ce_entries: &HashMap<String, ModelEntry>,
+        silicon_ce_entries: &FxHashMap<String, ModelEntry>,
     ) -> Option<Entry> {
         Some(match (typ.kind(), sil_entry) {
             (ty::TyKind::Bool, Some(ModelEntry::LitBool(value)))
@@ -227,6 +227,10 @@ impl<'ce, 'tcx> CounterexampleTranslator<'ce, 'tcx> {
             }
             (ty::TyKind::Int(_) | ty::TyKind::Uint(_), _)
                 => Entry::Int(self.translate_int(sil_entry)?),
+            (ty::TyKind::Float(ty::FloatTy::F32), _)
+                => Entry::Float(self.translate_float32(sil_entry)?),
+            (ty::TyKind::Float(ty::FloatTy::F64), _)
+            => Entry::Float(self.translate_float64(sil_entry)?),
             (ty::TyKind::Char, _) => {
                 let value_str = self.translate_int(sil_entry)?;
                 let value = value_str.parse::<u32>().ok()?;
@@ -258,7 +262,7 @@ impl<'ce, 'tcx> CounterexampleTranslator<'ce, 'tcx> {
             }
             (ty::TyKind::Adt(adt_def, subst), _) if adt_def.is_struct() => {
                 let variant = adt_def.variants.iter().next().unwrap();
-                let struct_name = variant.ident.name.to_ident_string();
+                let struct_name = variant.ident(self.tcx).name.to_ident_string();
                 let field_entries = self.translate_vardef(
                     variant,
                     sil_entry,
@@ -298,7 +302,7 @@ impl<'ce, 'tcx> CounterexampleTranslator<'ce, 'tcx> {
                     let discriminant = x.parse::<u32>().unwrap();
                     variant = adt_def.variants.iter().find(|x| get_discriminant_of_vardef(x) == Some(discriminant));
                     if let Some(v) = variant {
-                        variant_name = v.ident.name.to_ident_string();
+                        variant_name = v.ident(self.tcx).name.to_ident_string();
                     }
                 }
 
@@ -337,11 +341,11 @@ impl<'ce, 'tcx> CounterexampleTranslator<'ce, 'tcx> {
         sil_entry: Option<&ModelEntry>,
         vir_name: String,
         subst: ty::subst::SubstsRef<'tcx>,
-        silicon_ce_entries: &HashMap<String, ModelEntry>,
+        silicon_ce_entries: &FxHashMap<String, ModelEntry>,
     ) -> Vec<(String, Entry)> {
         let mut field_entries = vec![];
         for f in &variant.fields {
-            let field_name = f.ident.name.to_ident_string();
+            let field_name = f.ident(self.tcx).name.to_ident_string();
             let typ = f.ty(self.tcx, subst);
 
             // extract recursively
@@ -381,6 +385,36 @@ impl<'ce, 'tcx> CounterexampleTranslator<'ce, 'tcx> {
             Some(ModelEntry::Ref(_, map)) => {
                 let entry = map.get("val_int");
                 if let Some(ModelEntry::LitInt(value)) = entry {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        }
+    }
+
+    fn translate_float32(&self, opt_sil_entry: Option<&ModelEntry>) -> Option<String> {
+        match opt_sil_entry {
+            Some(ModelEntry::LitFloat(value)) => Some(value.to_string()),
+            Some(ModelEntry::Ref(_, map)) => {
+                let entry = map.get("val_float32");
+                if let Some(ModelEntry::LitFloat(value)) = entry {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        }
+    }
+
+    fn translate_float64(&self, opt_sil_entry: Option<&ModelEntry>) -> Option<String> {
+        match opt_sil_entry {
+            Some(ModelEntry::LitFloat(value)) => Some(value.to_string()),
+            Some(ModelEntry::Ref(_, map)) => {
+                let entry = map.get("val_float64");
+                if let Some(ModelEntry::LitFloat(value)) = entry {
                     Some(value.to_string())
                 } else {
                     None

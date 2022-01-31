@@ -10,7 +10,7 @@ use rustc_hir::def_id::LocalDefId;
 use rustc_interface::{interface::Compiler, Config, Queries};
 use rustc_middle::ty::{
     self,
-    query::{query_values::mir_borrowck, Providers},
+    query::{query_values::mir_borrowck, ExternProviders, Providers},
     TyCtxt,
 };
 use rustc_session::Session;
@@ -35,9 +35,8 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> mir_borrowck<'tc
     original_mir_borrowck(tcx, def_id)
 }
 
-fn override_queries(_session: &Session, local: &mut Providers, external: &mut Providers) {
+fn override_queries(_session: &Session, local: &mut Providers, _external: &mut ExternProviders) {
     local.mir_borrowck = mir_borrowck;
-    external.mir_borrowck = mir_borrowck;
 }
 
 impl rustc_driver::Callbacks for PrustiCompilerCalls {
@@ -79,7 +78,7 @@ impl rustc_driver::Callbacks for PrustiCompilerCalls {
             let mut spec_collector = specs::SpecCollector::new(&env);
             tcx.hir().walk_toplevel_module(&mut spec_collector);
             tcx.hir().walk_attributes(&mut spec_collector);
-            let def_spec = spec_collector.build_def_specs(&env);
+            let def_spec = spec_collector.build_def_specs();
             if config::print_typeckd_specs() {
                 let mut values: Vec<_> = def_spec
                     .specs

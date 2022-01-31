@@ -4,50 +4,32 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use super::{
-    places_utils::{union, union3},
-    Predicates,
-};
+use super::Predicates;
 use crate::encoder::foldunfold::{
     footprint::*,
     perm::{Perm::*, *},
-    places_utils::ancestors,
 };
 use log::{debug, trace};
-use std::{
-    collections::{HashMap, HashSet},
-    iter::FromIterator,
-};
+use rustc_hash::FxHashSet;
+use std::iter::FromIterator;
 use vir_crate::polymorphic::{self as vir, PermAmount};
 
 pub trait RequiredPermissionsGetter {
     /// Returns the permissions required for the expression/statement to be well-defined.
     /// The result might be an over-approximation, as in the `vir::Expr::FuncApp` case.
-    fn get_required_permissions(
-        &self,
-        predicates: &Predicates,
-        old_exprs: &HashMap<String, Vec<vir::Expr>>,
-    ) -> HashSet<Perm>;
+    fn get_required_permissions(&self, predicates: &Predicates) -> FxHashSet<Perm>;
 }
 
 impl<'a, A: RequiredPermissionsGetter> RequiredPermissionsGetter for &'a A {
-    fn get_required_permissions(
-        &self,
-        predicates: &Predicates,
-        old_exprs: &HashMap<String, Vec<vir::Expr>>,
-    ) -> HashSet<Perm> {
-        (*self).get_required_permissions(predicates, old_exprs)
+    fn get_required_permissions(&self, predicates: &Predicates) -> FxHashSet<Perm> {
+        (*self).get_required_permissions(predicates)
     }
 }
 
 impl<'a, A: RequiredPermissionsGetter> RequiredPermissionsGetter for Vec<A> {
-    fn get_required_permissions(
-        &self,
-        predicates: &Predicates,
-        old_exprs: &HashMap<String, Vec<vir::Expr>>,
-    ) -> HashSet<Perm> {
-        self.iter().fold(HashSet::new(), |res, x| {
-            res.union(&x.get_required_permissions(predicates, old_exprs))
+    fn get_required_permissions(&self, predicates: &Predicates) -> FxHashSet<Perm> {
+        self.iter().fold(FxHashSet::default(), |res, x| {
+            res.union(&x.get_required_permissions(predicates))
                 .cloned()
                 .collect()
         })
@@ -55,28 +37,14 @@ impl<'a, A: RequiredPermissionsGetter> RequiredPermissionsGetter for Vec<A> {
 }
 
 impl RequiredPermissionsGetter for vir::Stmt {
-    fn get_required_permissions(
-        &self,
-        predicates: &Predicates,
-        old_exprs: &HashMap<String, Vec<vir::Expr>>,
-    ) -> HashSet<Perm> {
+    fn get_required_permissions(&self, predicates: &Predicates) -> FxHashSet<Perm> {
         match self {
-            &vir::Stmt::Comment(_) => HashSet::new(),
-
-            &vir::Stmt::Label(vir::Label { ref label }) => {
-                // A label has to ensure that all usages of labelled-old expressions can be
-                // solved by unfolding, and not folding, permissions.
-                if let Some(exprs) = old_exprs.get(label) {
-                    exprs.get_required_permissions(predicates, old_exprs)
-                } else {
-                    HashSet::new()
-                }
-            }
+            &vir::Stmt::Comment(_) | &vir::Stmt::Label(_) => FxHashSet::default(),
 
             &vir::Stmt::Inhale(vir::Inhale { ref expr }) => {
                 // footprint = used - inhaled
                 perm_difference(
-                    expr.get_required_permissions(predicates, old_exprs),
+                    expr.get_required_permissions(predicates),
                     expr.get_footprint(predicates),
                 )
             }
@@ -93,7 +61,7 @@ impl RequiredPermissionsGetter for vir::Stmt {
                 ref expr,
                 ref position,
             }) => {
-                let perms = expr.get_required_permissions(predicates, old_exprs);
+                let perms = expr.get_required_permissions(predicates);
                 perms
                     .into_iter()
                     .map(|perm| perm.set_default_pos(*position))
@@ -107,7 +75,7 @@ impl RequiredPermissionsGetter for vir::Stmt {
             }) => {
                 // Preconditions and postconditions are empty
                 assert!(arguments.is_empty());
-                HashSet::from_iter(
+                FxHashSet::from_iter(
                     targets
                         .iter()
                         .cloned()
@@ -120,7 +88,7 @@ impl RequiredPermissionsGetter for vir::Stmt {
                 ref source,
                 ..
             }) => {
-                let mut res = source.get_required_permissions(predicates, old_exprs);
+                let mut res = source.get_required_permissions(predicates);
                 res.insert(Acc(target.clone(), PermAmount::Write));
                 res
             }
@@ -140,7 +108,7 @@ impl RequiredPermissionsGetter for vir::Stmt {
                 let predicate = predicates.get(predicate_type).unwrap();
 
                 let pred_self_place: vir::Expr = predicate.self_place();
-                let places_in_pred: HashSet<Perm> = predicate
+                let places_in_pred: FxHashSet<Perm> = predicate
                     .get_body_footprint(enum_variant)
                     .into_iter()
                     .map(|perm| {
@@ -162,20 +130,20 @@ impl RequiredPermissionsGetter for vir::Stmt {
                 let place = &arguments[0];
                 debug_assert!(place.is_place());
                 place
-                    .get_required_permissions(predicates, old_exprs)
+                    .get_required_permissions(predicates)
                     .into_iter()
                     .map(|perm| perm.init_perm_amount(permission))
                     .collect()
             }
 
-            &vir::Stmt::BeginFrame(_) | &vir::Stmt::EndFrame(_) => HashSet::new(),
+            &vir::Stmt::BeginFrame(_) | &vir::Stmt::EndFrame(_) => FxHashSet::default(),
 
             &vir::Stmt::TransferPerm(vir::TransferPerm {
                 ref left,
                 unchecked,
                 ..
             }) => {
-                let mut res = HashSet::new();
+                let mut res = FxHashSet::default();
                 if !unchecked {
                     res.insert(Acc(left.clone(), PermAmount::Read));
                 }
@@ -184,7 +152,7 @@ impl RequiredPermissionsGetter for vir::Stmt {
 
             &vir::Stmt::PackageMagicWand(..) => {
                 // We model the magic wand as "assert lhs; stmts; exhale rhs"
-                HashSet::new()
+                FxHashSet::default()
             }
 
             &vir::Stmt::ApplyMagicWand(vir::ApplyMagicWand {
@@ -192,11 +160,11 @@ impl RequiredPermissionsGetter for vir::Stmt {
                 ..
             }) => {
                 // We model the magic wand as "assert lhs; inhale rhs"
-                left.get_required_permissions(predicates, old_exprs)
+                left.get_required_permissions(predicates)
             }
 
             &vir::Stmt::ExpireBorrows(vir::ExpireBorrows { dag: ref _dag }) => {
-                HashSet::new() // TODO: #133
+                FxHashSet::default() // TODO: #133
             }
 
             &vir::Stmt::If(vir::If {
@@ -204,9 +172,9 @@ impl RequiredPermissionsGetter for vir::Stmt {
                 ref then_stmts,
                 ref else_stmts,
             }) => {
-                let guard_reqs = guard.get_required_permissions(predicates, old_exprs);
-                let then_reqs = then_stmts.get_required_permissions(predicates, old_exprs);
-                let else_reqs = else_stmts.get_required_permissions(predicates, old_exprs);
+                let guard_reqs = guard.get_required_permissions(predicates);
+                let then_reqs = then_stmts.get_required_permissions(predicates);
+                let else_reqs = else_stmts.get_required_permissions(predicates);
                 let then_else_reqs = then_reqs.intersection(&else_reqs).cloned().collect();
                 guard_reqs.union(&then_else_reqs).cloned().collect()
             }
@@ -217,7 +185,7 @@ impl RequiredPermissionsGetter for vir::Stmt {
             }) => {
                 // Delegate
                 vir::Expr::downcast(true.into(), base.clone(), field.clone())
-                    .get_required_permissions(predicates, old_exprs)
+                    .get_required_permissions(predicates)
             }
 
             ref x => unimplemented!("{}", x),
@@ -226,14 +194,10 @@ impl RequiredPermissionsGetter for vir::Stmt {
 }
 
 impl RequiredPermissionsGetter for vir::Expr {
-    fn get_required_permissions(
-        &self,
-        predicates: &Predicates,
-        old_exprs: &HashMap<String, Vec<vir::Expr>>,
-    ) -> HashSet<Perm> {
+    fn get_required_permissions(&self, predicates: &Predicates) -> FxHashSet<Perm> {
         trace!("[enter] get_required_permissions(expr={})", self);
         let permissions = match self {
-            vir::Expr::Const(..) => HashSet::new(),
+            vir::Expr::Const(..) => FxHashSet::default(),
 
             vir::Expr::Unfolding(vir::Unfolding {
                 arguments,
@@ -251,7 +215,7 @@ impl RequiredPermissionsGetter for vir::Expr {
                 let predicate = predicates.get(predicate_type).unwrap();
 
                 let pred_self_place: vir::Expr = predicate.self_place();
-                let places_in_pred: HashSet<Perm> = predicate
+                let places_in_pred: FxHashSet<Perm> = predicate
                     .get_body_footprint(variant)
                     .into_iter()
                     .map(|aop| {
@@ -261,8 +225,8 @@ impl RequiredPermissionsGetter for vir::Expr {
                     .collect();
 
                 // Simulate temporary unfolding of `place`
-                let expr_req_places = base.get_required_permissions(predicates, old_exprs);
-                let mut req_places: HashSet<_> = perm_difference(expr_req_places, places_in_pred);
+                let expr_req_places = base.get_required_permissions(predicates);
+                let mut req_places: FxHashSet<_> = perm_difference(expr_req_places, places_in_pred);
                 req_places.insert(Pred(place.clone(), *permission));
                 req_places.into_iter().collect()
             }
@@ -271,7 +235,7 @@ impl RequiredPermissionsGetter for vir::Expr {
                 label: ref _label,
                 base: ref _base,
                 ..
-            }) => HashSet::new(),
+            }) => FxHashSet::default(),
 
             vir::Expr::PredicateAccessPredicate(vir::PredicateAccessPredicate {
                 box argument,
@@ -311,28 +275,28 @@ impl RequiredPermissionsGetter for vir::Expr {
             }
 
             vir::Expr::FieldAccessPredicate(vir::FieldAccessPredicate { ref base, .. }) => base
-                .get_required_permissions(predicates, old_exprs)
+                .get_required_permissions(predicates)
                 .into_iter()
                 .collect(),
 
             vir::Expr::UnaryOp(vir::UnaryOp { ref argument, .. }) => {
-                argument.get_required_permissions(predicates, old_exprs)
+                argument.get_required_permissions(predicates)
             }
 
             vir::Expr::BinOp(vir::BinOp {
                 box left,
                 box right,
                 ..
-            }) => vec![left, right].get_required_permissions(predicates, old_exprs),
+            }) => vec![left, right].get_required_permissions(predicates),
 
             vir::Expr::ContainerOp(vir::ContainerOp {
                 box left,
                 box right,
                 ..
-            }) => vec![left, right].get_required_permissions(predicates, old_exprs),
+            }) => vec![left, right].get_required_permissions(predicates),
 
             vir::Expr::Seq(vir::Seq { elements, .. }) => {
-                elements.get_required_permissions(predicates, old_exprs)
+                elements.get_required_permissions(predicates)
             }
 
             vir::Expr::Cond(vir::Cond {
@@ -340,7 +304,7 @@ impl RequiredPermissionsGetter for vir::Expr {
                 box then_expr,
                 box else_expr,
                 ..
-            }) => vec![guard, then_expr, else_expr].get_required_permissions(predicates, old_exprs),
+            }) => vec![guard, then_expr, else_expr].get_required_permissions(predicates),
 
             vir::Expr::LetExpr(vir::LetExpr {
                 variable: _variable,
@@ -365,17 +329,14 @@ impl RequiredPermissionsGetter for vir::Expr {
                     .iter()
                     .all(|var| !var.typ.is_typed_ref_or_type_var()));
 
-                let vars_places: HashSet<_> = variables
+                let vars_places: FxHashSet<_> = variables
                     .iter()
                     .map(|var| Acc(vir::Expr::local(var.clone()), PermAmount::Write))
                     .collect();
-                perm_difference(
-                    body.get_required_permissions(predicates, old_exprs),
-                    vars_places,
-                )
+                perm_difference(body.get_required_permissions(predicates), vars_places)
             }
 
-            vir::Expr::Local(..) => HashSet::new(),
+            vir::Expr::Local(..) => FxHashSet::default(),
 
             vir::Expr::AddrOf(..) => unreachable!(),
 
@@ -394,7 +355,7 @@ impl RequiredPermissionsGetter for vir::Expr {
                 ..
             }) => {
                 // Not exactly Viper's semantics
-                HashSet::new()
+                FxHashSet::default()
             }
 
             vir::Expr::FuncApp(vir::FuncApp { ref arguments, .. })
@@ -429,10 +390,10 @@ impl RequiredPermissionsGetter for vir::Expr {
                         }
                     })
                     .collect::<Vec<_>>()
-                    .get_required_permissions(predicates, old_exprs)
+                    .get_required_permissions(predicates)
             }
 
-            vir::Expr::InhaleExhale(..) => HashSet::new(),
+            vir::Expr::InhaleExhale(..) => FxHashSet::default(),
 
             vir::Expr::Downcast(vir::DowncastExpr { ref enum_place, .. }) => {
                 let predicate_type = enum_place.get_type();
@@ -442,7 +403,7 @@ impl RequiredPermissionsGetter for vir::Expr {
                     enum_place
                         .clone()
                         .field(enum_predicate.discriminant_field.clone())
-                        .get_required_permissions(predicates, old_exprs)
+                        .get_required_permissions(predicates)
                 } else {
                     unreachable!()
                 }

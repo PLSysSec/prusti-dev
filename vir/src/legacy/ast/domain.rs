@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use crate::legacy::ast::*;
+use crate::{common::identifier::WithIdentifier, legacy::ast::*};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,7 +84,8 @@ impl fmt::Display for DomainFunc {
 
 impl WithIdentifier for DomainFunc {
     fn get_identifier(&self) -> String {
-        compute_identifier(&self.name, &self.formal_args, &self.return_type)
+        // The functions in `low` should be already monomorphised.
+        self.name.clone()
     }
 }
 

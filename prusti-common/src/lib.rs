@@ -8,7 +8,6 @@
 #![feature(box_syntax)]
 #![feature(nll)]
 
-#![allow(unused_imports)]
 #![deny(unused_must_use)]
 
 #[macro_use]
@@ -29,8 +28,6 @@ pub mod config;
 pub mod report;
 mod stopwatch;
 pub mod utils;
-pub mod verification_context;
-pub mod verification_service;
 pub mod vir;
 
 pub use stopwatch::Stopwatch;

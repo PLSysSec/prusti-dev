@@ -9,7 +9,11 @@ use super::super::{
     cfg::CfgBlockIndex,
 };
 use crate::legacy::ast::*;
-use std::fmt;
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    mem::discriminant,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stmt {
@@ -66,6 +70,35 @@ pub enum Stmt {
     /// * place to the enumeration instance
     /// * field that encodes the variant
     Downcast(Expr, Field),
+}
+
+// This preserves `Stmt == Stmt ==> hash(Stmt) == hash(Stmt)`
+#[allow(clippy::derive_hash_xor_eq)]
+impl Hash for Stmt {
+    /// Hash ignoring Comments and ExpireBorrows
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Stmt::Comment(_) => return,
+            Stmt::Label(s) => s.hash(state),
+            Stmt::Inhale(e) => e.hash(state),
+            Stmt::Exhale(e, p) => (e, p).hash(state),
+            Stmt::Assert(e, p) => (e, p).hash(state),
+            Stmt::MethodCall(s, v1, v2) => (s, v1, v2).hash(state),
+            Stmt::Assign(e1, e2, ak) => (e1, e2, ak).hash(state),
+            Stmt::Fold(s, v, pa, mevi, p) => (s, v, pa, mevi, p).hash(state),
+            Stmt::Unfold(s, ve, pa, mevi) => (s, ve, pa, mevi).hash(state),
+            Stmt::Obtain(e, p) => (e, p).hash(state),
+            Stmt::BeginFrame => {}
+            Stmt::EndFrame => {}
+            Stmt::TransferPerm(e1, e2, b) => (e1, e2, b).hash(state),
+            Stmt::PackageMagicWand(e, vs, s, vlv, p) => (e, vs, s, vlv, p).hash(state),
+            Stmt::ApplyMagicWand(e, p) => (e, p).hash(state),
+            Stmt::ExpireBorrows(_) => return,
+            Stmt::If(e, vs1, vs2) => (e, vs1, vs2).hash(state),
+            Stmt::Downcast(e, f) => (e, f).hash(state),
+        }
+        discriminant(self).hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -184,7 +217,7 @@ impl fmt::Display for Stmt {
                     writeln!(f)?;
                 }
                 for stmt in package_stmts.iter() {
-                    writeln!(f, "    {}", stmt.to_string().replace("\n", "\n    "))?;
+                    writeln!(f, "    {}", stmt.to_string().replace('\n', "\n    "))?;
                 }
                 write!(f, "}}")
             }
@@ -205,7 +238,7 @@ impl fmt::Display for Stmt {
 
             Stmt::If(ref guard, ref then_stmts, ref else_stmts) => {
                 fn write_stmt(f: &mut fmt::Formatter, stmt: &Stmt) -> fmt::Result {
-                    writeln!(f, "    {}", stmt.to_string().replace("\n", "\n    "))
+                    writeln!(f, "    {}", stmt.to_string().replace('\n', "\n    "))
                 }
                 fn write_block(f: &mut fmt::Formatter, stmts: &[Stmt]) -> fmt::Result {
                     write!(f, "{{")?;
@@ -270,6 +303,7 @@ impl Stmt {
         }
     }
 
+    #[must_use]
     pub fn set_pos(self, pos: Position) -> Self {
         match self {
             Stmt::PackageMagicWand(wand, package_body, label, vars, _) => {
@@ -281,6 +315,7 @@ impl Stmt {
     }
 
     // Replace a Position::default() position with `pos`
+    #[must_use]
     pub fn set_default_pos(self, pos: Position) -> Self {
         if self.pos().iter().any(|x| x.is_default()) {
             self.set_pos(pos)
@@ -290,6 +325,7 @@ impl Stmt {
     }
 
     // Replace all Position::default() positions in expressions with `pos`
+    #[must_use]
     pub fn set_default_expr_pos(self, pos: Position) -> Self {
         self.map_expr(|e| e.set_default_pos(pos))
     }

@@ -1,3 +1,5 @@
+use syn::spanned::Spanned;
+
 fn append(s: &mut String, iter: impl Iterator<Item = char>) {
     for c in iter {
         s.push(c);
@@ -11,6 +13,12 @@ pub fn method_name_from_camel(ident: &syn::Ident) -> syn::Ident {
 
 /// Converts `CamelCase` to `<prefix>camel_case`
 pub fn prefixed_method_name_from_camel(prefix: &str, ident: &syn::Ident) -> syn::Ident {
+    let new_ident = prefixed_method_name_from_camel_raw(prefix, ident);
+    syn::Ident::new(&new_ident, ident.span())
+}
+
+/// Converts `CamelCase` to `<prefix>camel_case`
+pub fn prefixed_method_name_from_camel_raw(prefix: &str, ident: &syn::Ident) -> String {
     let string = ident.to_string();
     let mut iterator = string.chars();
     let mut new_ident = String::from(prefix);
@@ -23,18 +31,17 @@ pub fn prefixed_method_name_from_camel(prefix: &str, ident: &syn::Ident) -> syn:
             new_ident.push(c);
         }
     }
-    let new_ident = match new_ident.as_ref() {
-        "struct" | "enum" | "union" | "type" => {
+    match new_ident.as_ref() {
+        "struct" | "enum" | "union" | "type" | "ref" | "move" => {
             new_ident.push('_');
             new_ident
         }
         _ => new_ident,
-    };
-    syn::Ident::new(&new_ident, ident.span())
+    }
 }
 
 pub fn append_ident(ident: &syn::Ident, suffix: &str) -> syn::Ident {
-    let name = format!("{}{}", ident, suffix);
+    let name = format!("{}{}", ident, suffix).replace("__", "_");
     syn::Ident::new(&name, ident.span())
 }
 
@@ -65,4 +72,63 @@ pub fn unbox_type(ty: &syn::Type) -> syn::Type {
         _ => {}
     }
     ty.clone()
+}
+
+/// If the type is a single identifier, return it.
+pub fn unwrap_type_ident(ty: &syn::Type) -> syn::Result<&syn::Ident> {
+    match ty {
+        syn::Type::Path(syn::TypePath {
+            qself: None,
+            path:
+                syn::Path {
+                    leading_colon: None,
+                    segments,
+                },
+        }) if segments.len() == 1 => {
+            if let syn::PathSegment {
+                ident,
+                arguments: syn::PathArguments::None,
+            } = &segments[0]
+            {
+                return Ok(ident);
+            }
+        }
+        _ => {}
+    }
+    Err(syn::Error::new(
+        ty.span(),
+        format!("type {:?} is not an ident", ty),
+    ))
+}
+
+/// If the type is `Vec<T>` or `Box<T>` return the container type and `T`.
+pub fn extract_container(ty: &syn::Type) -> syn::Result<(&syn::Ident, Vec<&syn::Ident>)> {
+    match ty {
+        syn::Type::Path(syn::TypePath {
+            qself: None,
+            path:
+                syn::Path {
+                    leading_colon: None,
+                    segments,
+                },
+        }) if segments.len() == 1 => match &segments[0] {
+            syn::PathSegment {
+                ident,
+                arguments:
+                    syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+                        args, ..
+                    }),
+            } if (ident == "Box" || ident == "Vec" || ident == "Option") && args.len() == 1 => {
+                if let syn::GenericArgument::Type(inner_ty) = &args[0] {
+                    let (inner_ident, mut containers) = extract_container(inner_ty)?;
+                    containers.push(ident);
+                    return Ok((inner_ident, containers));
+                }
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    let ident = unwrap_type_ident(ty)?;
+    Ok((ident, Vec::new()))
 }

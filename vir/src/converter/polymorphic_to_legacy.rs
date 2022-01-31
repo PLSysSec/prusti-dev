@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fmt};
-
 use super::super::{legacy, polymorphic};
+use crate::common::identifier::WithIdentifier;
+use std::{collections::HashMap, fmt};
 use uuid::Uuid;
 
 // bodyless_method
@@ -23,12 +23,6 @@ impl From<polymorphic::BodylessMethod> for legacy::BodylessMethod {
 }
 
 // common
-impl From<polymorphic::Position> for legacy::Position {
-    fn from(position: polymorphic::Position) -> legacy::Position {
-        legacy::Position::new(position.line(), position.column(), position.id())
-    }
-}
-
 impl From<polymorphic::PermAmountError> for legacy::PermAmountError {
     fn from(perm_amount_error: polymorphic::PermAmountError) -> legacy::PermAmountError {
         match perm_amount_error {
@@ -52,11 +46,21 @@ impl From<polymorphic::PermAmount> for legacy::PermAmount {
     }
 }
 
+impl From<polymorphic::Float> for legacy::Float {
+    fn from(float: polymorphic::Float) -> legacy::Float {
+        match float {
+            polymorphic::Float::F32 => legacy::Float::F32,
+            polymorphic::Float::F64 => legacy::Float::F64,
+        }
+    }
+}
+
 impl From<polymorphic::Type> for legacy::Type {
     fn from(typ: polymorphic::Type) -> legacy::Type {
         match typ {
             polymorphic::Type::Int => legacy::Type::Int,
             polymorphic::Type::Bool => legacy::Type::Bool,
+            polymorphic::Type::Float(float) => legacy::Type::Float(float.into()),
             polymorphic::Type::Seq(seq) => legacy::Type::Seq(Box::new((*seq.typ).into())),
             polymorphic::Type::TypedRef(_) | polymorphic::Type::TypeVar(_) => {
                 legacy::Type::TypedRef(typ.encode_as_string())
@@ -72,6 +76,7 @@ impl From<polymorphic::TypeId> for legacy::TypeId {
         match type_id {
             polymorphic::TypeId::Int => legacy::TypeId::Int,
             polymorphic::TypeId::Bool => legacy::TypeId::Bool,
+            polymorphic::TypeId::Float => legacy::TypeId::Float,
             polymorphic::TypeId::Ref => legacy::TypeId::Ref,
             polymorphic::TypeId::Seq => legacy::TypeId::Seq,
             polymorphic::TypeId::Domain => legacy::TypeId::Domain,
@@ -125,7 +130,7 @@ impl From<polymorphic::Domain> for legacy::Domain {
 impl From<polymorphic::DomainFunc> for legacy::DomainFunc {
     fn from(domain_func: polymorphic::DomainFunc) -> legacy::DomainFunc {
         legacy::DomainFunc {
-            name: domain_func.name,
+            name: domain_func.get_identifier(),
             formal_args: domain_func
                 .formal_args
                 .into_iter()
@@ -279,7 +284,12 @@ impl From<polymorphic::Expr> for legacy::Expr {
                 let_expr.position.into(),
             ),
             polymorphic::Expr::FuncApp(func_app) => legacy::Expr::FuncApp(
-                func_app.function_name,
+                polymorphic::compute_identifier(
+                    &func_app.function_name,
+                    &func_app.type_arguments,
+                    &func_app.formal_arguments,
+                    &func_app.return_type,
+                ),
                 func_app
                     .arguments
                     .into_iter()
@@ -341,23 +351,23 @@ impl From<polymorphic::UnaryOpKind> for legacy::UnaryOpKind {
     }
 }
 
-impl From<polymorphic::BinOpKind> for legacy::BinOpKind {
-    fn from(bin_op_kind: polymorphic::BinOpKind) -> legacy::BinOpKind {
+impl From<polymorphic::BinaryOpKind> for legacy::BinaryOpKind {
+    fn from(bin_op_kind: polymorphic::BinaryOpKind) -> legacy::BinaryOpKind {
         match bin_op_kind {
-            polymorphic::BinOpKind::EqCmp => legacy::BinOpKind::EqCmp,
-            polymorphic::BinOpKind::NeCmp => legacy::BinOpKind::NeCmp,
-            polymorphic::BinOpKind::GtCmp => legacy::BinOpKind::GtCmp,
-            polymorphic::BinOpKind::GeCmp => legacy::BinOpKind::GeCmp,
-            polymorphic::BinOpKind::LtCmp => legacy::BinOpKind::LtCmp,
-            polymorphic::BinOpKind::LeCmp => legacy::BinOpKind::LeCmp,
-            polymorphic::BinOpKind::Add => legacy::BinOpKind::Add,
-            polymorphic::BinOpKind::Sub => legacy::BinOpKind::Sub,
-            polymorphic::BinOpKind::Mul => legacy::BinOpKind::Mul,
-            polymorphic::BinOpKind::Div => legacy::BinOpKind::Div,
-            polymorphic::BinOpKind::Mod => legacy::BinOpKind::Mod,
-            polymorphic::BinOpKind::And => legacy::BinOpKind::And,
-            polymorphic::BinOpKind::Or => legacy::BinOpKind::Or,
-            polymorphic::BinOpKind::Implies => legacy::BinOpKind::Implies,
+            polymorphic::BinaryOpKind::EqCmp => legacy::BinaryOpKind::EqCmp,
+            polymorphic::BinaryOpKind::NeCmp => legacy::BinaryOpKind::NeCmp,
+            polymorphic::BinaryOpKind::GtCmp => legacy::BinaryOpKind::GtCmp,
+            polymorphic::BinaryOpKind::GeCmp => legacy::BinaryOpKind::GeCmp,
+            polymorphic::BinaryOpKind::LtCmp => legacy::BinaryOpKind::LtCmp,
+            polymorphic::BinaryOpKind::LeCmp => legacy::BinaryOpKind::LeCmp,
+            polymorphic::BinaryOpKind::Add => legacy::BinaryOpKind::Add,
+            polymorphic::BinaryOpKind::Sub => legacy::BinaryOpKind::Sub,
+            polymorphic::BinaryOpKind::Mul => legacy::BinaryOpKind::Mul,
+            polymorphic::BinaryOpKind::Div => legacy::BinaryOpKind::Div,
+            polymorphic::BinaryOpKind::Mod => legacy::BinaryOpKind::Mod,
+            polymorphic::BinaryOpKind::And => legacy::BinaryOpKind::And,
+            polymorphic::BinaryOpKind::Or => legacy::BinaryOpKind::Or,
+            polymorphic::BinaryOpKind::Implies => legacy::BinaryOpKind::Implies,
         }
     }
 }
@@ -372,12 +382,22 @@ impl From<polymorphic::ContainerOpKind> for legacy::ContainerOpKind {
     }
 }
 
+impl From<polymorphic::FloatConst> for legacy::FloatConst {
+    fn from(old: polymorphic::FloatConst) -> legacy::FloatConst {
+        match old {
+            polymorphic::FloatConst::F32(value) => legacy::FloatConst::F32(value),
+            polymorphic::FloatConst::F64(value) => legacy::FloatConst::F64(value),
+        }
+    }
+}
+
 impl From<polymorphic::Const> for legacy::Const {
     fn from(old_const: polymorphic::Const) -> legacy::Const {
         match old_const {
             polymorphic::Const::Bool(bool_value) => legacy::Const::Bool(bool_value),
             polymorphic::Const::Int(i64_value) => legacy::Const::Int(i64_value),
             polymorphic::Const::BigInt(label) => legacy::Const::BigInt(label),
+            polymorphic::Const::Float(float_value) => legacy::Const::Float(float_value.into()),
             polymorphic::Const::FnPtr => legacy::Const::FnPtr,
         }
     }
@@ -387,7 +407,7 @@ impl From<polymorphic::Const> for legacy::Const {
 impl From<polymorphic::Function> for legacy::Function {
     fn from(function: polymorphic::Function) -> legacy::Function {
         legacy::Function {
-            name: function.name,
+            name: function.get_identifier(),
             formal_args: function
                 .formal_args
                 .into_iter()
@@ -593,7 +613,6 @@ impl From<polymorphic::Trigger> for legacy::Trigger {
 impl From<polymorphic::CfgMethod> for legacy::CfgMethod {
     fn from(cfg_method: polymorphic::CfgMethod) -> legacy::CfgMethod {
         legacy::CfgMethod {
-            uuid: cfg_method.uuid,
             method_name: cfg_method.method_name,
             formal_arg_count: cfg_method.formal_arg_count,
             formal_returns: cfg_method
@@ -607,15 +626,12 @@ impl From<polymorphic::CfgMethod> for legacy::CfgMethod {
                 .map(|local_var| local_var.into())
                 .collect(),
             labels: cfg_method.labels.into_iter().collect(),
-            reserved_labels: cfg_method.reserved_labels.into_iter().collect(),
             basic_blocks: cfg_method
                 .basic_blocks
                 .into_iter()
                 .map(|basic_block| basic_block.into())
                 .collect(),
             basic_blocks_labels: cfg_method.basic_blocks_labels.into_iter().collect(),
-            fresh_var_index: cfg_method.fresh_var_index,
-            fresh_label_index: cfg_method.fresh_label_index,
         }
     }
 }
@@ -657,7 +673,6 @@ impl From<polymorphic::Successor> for legacy::Successor {
 impl From<polymorphic::CfgBlockIndex> for legacy::CfgBlockIndex {
     fn from(cfg_block_index: polymorphic::CfgBlockIndex) -> legacy::CfgBlockIndex {
         legacy::CfgBlockIndex {
-            method_uuid: cfg_block_index.method_uuid,
             block_index: cfg_block_index.block_index,
         }
     }

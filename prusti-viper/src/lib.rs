@@ -9,8 +9,8 @@
 #![feature(box_syntax)]
 #![feature(bool_to_option)]
 #![feature(try_blocks)]
+#![feature(never_type)]
 
-#![allow(unused_imports)]
 #![deny(unused_must_use)]
 #![deny(unreachable_patterns)]
 // #![deny(unused_mut)]
@@ -25,7 +25,7 @@ extern crate rustc_index;
 extern crate rustc_ast;
 extern crate rustc_target;
 extern crate rustc_attr;
-#[macro_use]
+extern crate rustc_data_structures;
 extern crate lazy_static;
 
 pub mod encoder;

@@ -22,6 +22,7 @@ impl IntoPredicates for vir_high::TypeDecl {
         match self {
             vir_high::TypeDecl::Bool => construct_bool_predicate(encoder),
             vir_high::TypeDecl::Int(ty_decl) => ty_decl.lower(ty, encoder),
+            vir_high::TypeDecl::Float(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::TypeVar(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Tuple(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Struct(ty_decl) => ty_decl.lower(ty, encoder),
@@ -59,6 +60,18 @@ impl IntoPredicates for vir_high::type_decl::Int {
                 .as_ref()
                 .map(|bound| (**bound).lower(encoder)),
         );
+        Ok(vec![predicate])
+    }
+}
+
+impl IntoPredicates for vir_high::type_decl::Float {
+    fn lower(
+        &self,
+        ty: &vir_high::Type,
+        encoder: &impl HighTypeEncoderInterfacePrivate,
+    ) -> Predicates {
+        let field = create_value_field(ty.clone())?.lower(encoder);
+        let predicate = Predicate::new_primitive_value(ty.lower(encoder), field, None, None);
         Ok(vec![predicate])
     }
 }
@@ -131,9 +144,9 @@ impl IntoPredicates for vir_high::type_decl::Enum {
         let discriminant_loc = vir_poly::Expr::from(this.clone()).field(discriminant_field.clone());
 
         let mut variants = Vec::new();
-        for (variant, variant_index) in self.variants.iter().zip(self.discriminant_values.clone()) {
+        for (variant, discriminant) in self.variants.iter().zip(self.discriminant_values.clone()) {
             let guard =
-                vir_poly::Expr::eq_cmp(discriminant_loc.clone(), variant_index.lower(encoder));
+                vir_poly::Expr::eq_cmp(discriminant_loc.clone(), discriminant.lower(encoder));
             let variant_ty = ty.clone().variant(variant.name.clone().into());
             let predicate = lower_struct(variant, &variant_ty, encoder)?;
             variants.push((guard, variant.name.clone(), predicate));
@@ -188,7 +201,16 @@ impl IntoPredicates for vir_high::type_decl::Closure {
         ty: &vir_high::Type,
         encoder: &impl HighTypeEncoderInterfacePrivate,
     ) -> Predicates {
-        let predicate = Predicate::new_struct(ty.lower(encoder), vec![]);
+        let fields = self
+            .arguments
+            .iter()
+            .enumerate()
+            .map(|(field_num, ty)| {
+                let field_name = format!("closure_{}", field_num);
+                vir_high::FieldDecl::new(field_name, ty.clone()).lower(encoder)
+            })
+            .collect();
+        let predicate = Predicate::new_struct(ty.lower(encoder), fields);
         Ok(vec![predicate])
     }
 }

@@ -5,14 +5,14 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use vir_crate::polymorphic::Position;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap};
 use rustc_span::source_map::SourceMap;
 use rustc_span::MultiSpan;
 use viper::VerificationError;
 use prusti_interface::PrustiError;
 use log::{debug, trace};
 use prusti_interface::data::ProcedureDefId;
-use backtrace::trace;
+
 
 /// The cause of a panic!()
 #[derive(Clone, Debug)]
@@ -29,6 +29,13 @@ pub enum PanicCause {
     Unreachable,
     /// Caused by an unimplemented!()
     Unimplemented,
+}
+
+/// The kind of the method whose proof failed.
+#[derive(Clone, Debug)]
+pub enum BuiltinMethodKind {
+    WritePlace,
+    MovePlace,
 }
 
 /// In case of verification error, this enum will contain additional information
@@ -63,6 +70,18 @@ pub enum ErrorCtxt {
     UnreachableTerminator,
     /// An error that should never happen
     Unexpected,
+    /// An unexpected verification error happenning inside built-in method.
+    UnexpectedBuiltinMethod(BuiltinMethodKind),
+    /// Unexpected error when verifying a `StorageLive` statement.
+    UnexpectedStorageLive,
+    /// Unexpected error when verifying a `StorageDead` statement.
+    UnexpectedStorageDead,
+    /// An error related to a move assignment.
+    MovePlace,
+    /// An error related to a copy assignment.
+    CopyPlace,
+    /// An error related to a Writing a constant.
+    WritePlace,
     /// A pure function definition
     #[allow(dead_code)]
     PureFunctionDefinition,
@@ -102,8 +121,8 @@ pub enum ErrorCtxt {
 #[derive(Clone)]
 pub struct ErrorManager<'tcx> {
     codemap: &'tcx SourceMap,
-    source_span: HashMap<u64, MultiSpan>,
-    error_contexts: HashMap<u64, (ErrorCtxt, ProcedureDefId)>,
+    source_span: FxHashMap<u64, MultiSpan>,
+    error_contexts: FxHashMap<u64, (ErrorCtxt, ProcedureDefId)>,
     next_pos_id: u64,
 }
 
@@ -112,8 +131,8 @@ impl<'tcx> ErrorManager<'tcx>
     pub fn new(codemap: &'tcx SourceMap) -> Self {
         ErrorManager {
             codemap,
-            source_span: HashMap::new(),
-            error_contexts: HashMap::new(),
+            source_span: FxHashMap::default(),
+            error_contexts: FxHashMap::default(),
             next_pos_id: 1,
         }
     }
@@ -151,6 +170,13 @@ impl<'tcx> ErrorManager<'tcx>
         };
         self.source_span.insert(pos_id, span);
         pos
+    }
+
+    pub fn change_error_context(&mut self, position: Position, error_ctxt: ErrorCtxt) -> Position {
+        let span = self.source_span[&position.id()].clone();
+        let (_, def_id) = &self.error_contexts[&position.id()];
+        let def_id = *def_id;
+        self.register(span, error_ctxt, def_id)
     }
 
     pub fn get_def_id(&self, ver_error: &VerificationError) -> Option<&ProcedureDefId> {

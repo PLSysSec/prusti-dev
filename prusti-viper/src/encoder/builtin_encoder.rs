@@ -5,7 +5,9 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use prusti_common::{vir_local, vir_expr};
-use vir_crate::polymorphic::{self as vir, WithIdentifier};
+use vir_crate::polymorphic::{self as vir};
+use vir_crate::common::identifier::WithIdentifier;
+use super::high::builtin_functions::HighBuiltinFunctionEncoderInterface;
 
 const PRIMITIVE_VALID_DOMAIN_NAME: &str = "PrimitiveValidDomain";
 
@@ -14,6 +16,8 @@ const PRIMITIVE_VALID_DOMAIN_NAME: &str = "PrimitiveValidDomain";
 pub enum BuiltinMethodKind {
     HavocBool,
     HavocInt,
+    HavocF32,
+    HavocF64,
     HavocRef,
 }
 
@@ -51,17 +55,23 @@ pub enum BuiltinDomainKind {
     Primitive,
 }
 
-pub struct BuiltinEncoder {}
+pub struct BuiltinEncoder<'p, 'v: 'p, 'tcx: 'v> {
+    encoder: &'p super::Encoder<'v, 'tcx>,
+}
 
-impl BuiltinEncoder {
-    pub fn new() -> Self {
-        Self {}
+impl<'p, 'v: 'p, 'tcx: 'v> BuiltinEncoder<'p, 'v, 'tcx> {
+    pub fn new(encoder: &'p super::Encoder<'v, 'tcx>) -> Self {
+        Self {
+            encoder
+        }
     }
 
     pub fn encode_builtin_method_name(&self, method: BuiltinMethodKind) -> String {
         match method {
             BuiltinMethodKind::HavocBool => "builtin$havoc_bool".to_string(),
             BuiltinMethodKind::HavocInt => "builtin$havoc_int".to_string(),
+            BuiltinMethodKind::HavocF32 => "builtin$havoc_f32".to_string(),
+            BuiltinMethodKind::HavocF64 => "builtin$havoc_f64".to_string(),
             BuiltinMethodKind::HavocRef => "builtin$havoc_ref".to_string(),
         }
     }
@@ -70,6 +80,8 @@ impl BuiltinEncoder {
         let return_type = match method {
             BuiltinMethodKind::HavocBool => vir::Type::Bool,
             BuiltinMethodKind::HavocInt => vir::Type::Int,
+            BuiltinMethodKind::HavocF32 => vir::Type::Float(vir::Float::F32),
+            BuiltinMethodKind::HavocF64 => vir::Type::Float(vir::Float::F64),
             BuiltinMethodKind::HavocRef => vir::Type::typed_ref(""),
         };
         vir::BodylessMethod {
@@ -79,46 +91,12 @@ impl BuiltinEncoder {
         }
     }
 
-    pub fn encode_builtin_function_name(&self, function: &BuiltinFunctionKind) -> String {
-        match function {
-            BuiltinFunctionKind::Unreachable(vir::Type::Int) => "builtin$unreach_int".to_string(),
-            BuiltinFunctionKind::Unreachable(vir::Type::Bool) => "builtin$unreach_bool".to_string(),
-            BuiltinFunctionKind::Unreachable(vir::Type::TypedRef(_)) => {
-                "builtin$unreach_ref".to_string()
-            }
-            // TODO polymorphic: might combine this case with typed_ref
-            BuiltinFunctionKind::Unreachable(vir::Type::TypeVar(_)) => {
-                "builtin$unreach_var".to_string()
-            }
-            BuiltinFunctionKind::Unreachable(vir::Type::Domain(_)) => {
-                "builtin$unreach_domain".to_string()
-            }
-            BuiltinFunctionKind::Unreachable(vir::Type::Snapshot(_)) => {
-                "builtin$unreach_snap".to_string()
-            }
-            BuiltinFunctionKind::Unreachable(vir::Type::Seq(_)) => {
-                "builtin$unreach_seq".to_string()
-            }
-            BuiltinFunctionKind::Undefined(vir::Type::Int) => "builtin$undef_int".to_string(),
-            BuiltinFunctionKind::Undefined(vir::Type::Bool) => "builtin$undef_bool".to_string(),
-            BuiltinFunctionKind::Undefined(vir::Type::TypedRef(_)) => "builtin$undef_ref".to_string(),
-            // TODO polymorphic: might combine this case with typed_ref
-            BuiltinFunctionKind::Undefined(vir::Type::TypeVar(_)) => "builtin$undef_var".to_string(),
-            // TODO: do Domain and Snapshot make sense here?
-            BuiltinFunctionKind::Undefined(vir::Type::Domain(_)) => "builtin$undef_doman".to_string(),
-            BuiltinFunctionKind::Undefined(vir::Type::Snapshot(_)) => "builtin$undef_snap".to_string(),
-            BuiltinFunctionKind::Undefined(vir::Type::Seq(_)) => "builtin$undef_seq".to_string(),
-            BuiltinFunctionKind::ArrayLookupPure { .. }
-            | BuiltinFunctionKind::SliceLookupPure { .. } => "lookup_pure".to_string(),
-            BuiltinFunctionKind::SliceLen { .. } => "Slice$len".to_string(),
-        }
-    }
-
     pub fn encode_builtin_function_def(&self, function: BuiltinFunctionKind) -> vir::Function {
-        let fn_name = self.encode_builtin_function_name(&function);
+        let (fn_name, type_arguments) = self.encoder.encode_builtin_function_name_with_type_args(&function);
         match function {
             BuiltinFunctionKind::Unreachable(typ) => vir::Function {
                 name: fn_name,
+                type_arguments,
                 formal_args: vec![],
                 return_type: typ,
                 // Precondition is false, because we want to be sure that this function is never used
@@ -128,6 +106,7 @@ impl BuiltinEncoder {
             },
             BuiltinFunctionKind::Undefined(typ) => vir::Function {
                 name: fn_name,
+                type_arguments,
                 formal_args: vec![],
                 return_type: typ,
                 pres: vec![],
@@ -140,6 +119,7 @@ impl BuiltinEncoder {
 
                 vir::Function {
                     name: fn_name,
+                    type_arguments,
                     formal_args: vec![
                         // self,
                         self_var.clone(),
@@ -155,7 +135,7 @@ impl BuiltinEncoder {
                             vir::PermAmount::Read,
                         ),
                         // 0 <= idx < {len}
-                        vir_expr!{ [vir::Expr::from(0)] <= [vir::Expr::local(idx_var.clone())] },
+                        vir_expr!{ [vir::Expr::from(0u32)] <= [vir::Expr::local(idx_var.clone())] },
                         vir_expr!([vir::Expr::local(idx_var)]  < [vir::Expr::from(array_len)]),
                     ],
                     posts: vec![],
@@ -163,7 +143,7 @@ impl BuiltinEncoder {
                 }
             },
             BuiltinFunctionKind::SliceLookupPure { slice_pred_type, elem_pred_type, return_ty} => {
-                let slice_len = self.encode_builtin_function_name(
+                let (slice_len, slice_len_type_arguments) = self.encoder.encode_builtin_function_name_with_type_args(
                     &BuiltinFunctionKind::SliceLen { slice_pred_type: slice_pred_type.clone(), elem_pred_type }
                 );
                 let self_var = vir::LocalVar::new("self", slice_pred_type.clone());
@@ -171,6 +151,7 @@ impl BuiltinEncoder {
 
                 let slice_len_call = vir::Expr::func_app(
                     slice_len,
+                    slice_len_type_arguments,
                     vec![
                         vir::Expr::local(self_var.clone()),
                     ],
@@ -183,6 +164,7 @@ impl BuiltinEncoder {
 
                 vir::Function {
                     name: fn_name,
+                    type_arguments,
                     formal_args: vec![
                         self_var.clone(),
                         idx_var.clone(),
@@ -196,7 +178,7 @@ impl BuiltinEncoder {
                             vir::PermAmount::Read,
                         ),
                         // 0 <= idx < Slice${ty}$len(self)
-                        vir_expr!{ [vir::Expr::from(0)] <= [vir::Expr::local(idx_var.clone())] },
+                        vir_expr!{ [vir::Expr::from(0u32)] <= [vir::Expr::local(idx_var.clone())] },
                         vir_expr!{ [vir::Expr::local(idx_var)] < [slice_len_call] },
                     ],
                     posts: vec![],
@@ -208,6 +190,7 @@ impl BuiltinEncoder {
 
                 vir::Function {
                     name: fn_name,
+                    type_arguments,
                     formal_args: vec![
                         self_var.clone(),
                     ],
@@ -244,6 +227,7 @@ impl BuiltinEncoder {
         // snapshot::NAT_DOMAIN_NAME;
         let zero = vir::DomainFunc {
             name: "zero".to_owned(),
+            type_arguments: vec![],
             formal_args: vec![],
             return_type: vir::Type::domain(nat_domain_name.to_owned()),
             unique: false,
@@ -292,6 +276,7 @@ impl BuiltinEncoder {
                 let self_arg = vir::LocalVar::new("self", arg_typ);
                 let df = vir::DomainFunc {
                     name: format!("{}$valid", domain_name),
+                    type_arguments: vec![], // FIXME: This is most likely wrong.
                     formal_args: vec![self_arg],
                     return_type: vir::Type::Bool,
                     unique: false,

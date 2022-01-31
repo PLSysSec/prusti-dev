@@ -1,16 +1,20 @@
-use super::{
+pub(crate) use super::{
     field::FieldDecl,
     position::Position,
     ty::{Type, VariantIndex},
     variable::VariableDecl,
 };
 use crate::common::display;
+pub use crate::polymorphic::FloatConst;
 
 #[derive_helpers]
 #[derive_visitors]
+#[derive(derive_more::From, derive_more::IsVariant, derive_more::Unwrap)]
 pub enum Expression {
     /// A local variable.
     Local(Local),
+    /// A constructor of a complex type.
+    Constructor(Constructor),
     /// An enum variant.
     Variant(Variant),
     /// A field access. (Field accesses can never fail.)
@@ -38,12 +42,22 @@ pub enum Expression {
     /// * expression in which the downcast is visible
     /// * place to the enumeration that is downcasted
     /// * field that encodes the variant
+    // FIXME: Is downcast really needed? Isn't variant enough?
     Downcast(Downcast),
 }
 
 #[display(fmt = "{}", "variable.name")]
 pub struct Local {
     pub variable: VariableDecl,
+    pub position: Position,
+}
+
+#[display(fmt = "{}({})", ty, "display::cjoin(arguments)")]
+pub struct Constructor {
+    /// The type to be constructed.
+    pub ty: Type,
+    /// The arguments passed to the constructor.
+    pub arguments: Vec<Expression>,
     pub position: Position,
 }
 
@@ -95,6 +109,7 @@ pub enum ConstantValue {
     Bool(bool),
     Int(i64),
     BigInt(String),
+    Float(FloatConst),
     /// All function pointers share the same constant, because their function
     /// is determined by the type system.
     FnPtr,
@@ -112,7 +127,7 @@ pub struct UnaryOp {
     pub position: Position,
 }
 
-pub enum BinOpKind {
+pub enum BinaryOpKind {
     EqCmp,
     NeCmp,
     GtCmp,
@@ -131,7 +146,7 @@ pub enum BinOpKind {
 
 #[display(fmt = "({}) {} ({})", left, op_kind, right)]
 pub struct BinOp {
-    pub op_kind: BinOpKind,
+    pub op_kind: BinaryOpKind,
     pub left: Box<Expression>,
     pub right: Box<Expression>,
     pub position: Position,
@@ -202,12 +217,14 @@ pub struct LetExpr {
 #[display(fmt = "{}({})", function_name, "display::cjoin(arguments)")]
 pub struct FuncApp {
     pub function_name: String,
+    pub type_arguments: Vec<Type>,
     pub arguments: Vec<Expression>,
     pub parameters: Vec<VariableDecl>,
     pub return_type: Type,
     pub position: Position,
 }
 
+// FIXME: Is downcast really needed? Isn't variant enough?
 #[display(fmt = "(downcast {} to {} in {})", enum_place, "field.name", base)]
 pub struct Downcast {
     pub base: Box<Expression>,
