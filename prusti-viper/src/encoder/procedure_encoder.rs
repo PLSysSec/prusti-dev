@@ -2248,7 +2248,19 @@ impl<'p, 'v: 'p, 'tcx: 'v> ProcedureEncoder<'p, 'v, 'tcx> {
                                     destination,
                                     args,
                                     location,
-                                ).with_span(span)?
+                                ).with_span(span).or_else(|_| {
+                                    // Added by emlaufer. Fix to support vector indexing again.
+                                    // Should be fine for correctness.
+                                    self.encode_impure_function_call(
+                                        location,
+                                        term.source_info.span,
+                                        args,
+                                        destination,
+                                        def_id,
+                                        tymap,
+                                        substs,
+                                    )
+                                })?
                             );
                         }
 

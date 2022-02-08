@@ -32,6 +32,14 @@ impl syn::parse::Parse for AnyFnItem {
 }
 
 impl AnyFnItem {
+    pub fn attrs(&self) -> &Vec<syn::Attribute> {
+        match self {
+            AnyFnItem::Fn(item) => &item.attrs,
+            AnyFnItem::TraitMethod(item) => &item.attrs,
+            AnyFnItem::ImplMethod(item) => &item.attrs,
+        }
+    }
+
     pub fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
         match self {
             AnyFnItem::Fn(item) => &mut item.attrs,
