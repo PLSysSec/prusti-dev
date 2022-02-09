@@ -124,6 +124,23 @@ impl AstRewriter {
 
         spec_item.sig.generics = item.sig().generics.clone();
         spec_item.sig.inputs = item.sig().inputs.clone();
+
+        // Added by emlaufer
+        // Look for with_ghost_var macro so we can add it to the generated contracts
+        // TODO: is it even possible to have two ghost args with the current macro?
+        let mut ghost_vars = vec![];
+        for attr in item.attrs() {
+            if attr.path.segments.len() == 1 {
+                if attr.path.segments[0].ident.to_string() == "with_ghost_var" {
+                    let mut iter = attr.tokens.clone().into_iter();
+                    let tokens = prusti_utils::force_matches!(iter.next().unwrap(), proc_macro2::TokenTree::Group(group) => group.stream());
+                    let fnarg: syn::FnArg = syn::parse2(tokens).unwrap();
+                    ghost_vars.push(fnarg);
+                }
+            }
+        }
+        spec_item.sig.inputs.extend(ghost_vars);
+
         match spec_type {
             SpecItemType::Postcondition | SpecItemType::Pledge => {
                 let fn_arg = self.generate_result_arg(item);
