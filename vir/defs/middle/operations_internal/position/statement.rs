@@ -7,14 +7,18 @@ impl Positioned for Statement {
             Self::Comment(statement) => statement.position(),
             Self::Inhale(statement) => statement.position(),
             Self::Exhale(statement) => statement.position(),
+            Self::Assert(statement) => statement.position(),
             Self::FoldOwned(statement) => statement.position(),
             Self::UnfoldOwned(statement) => statement.position(),
             Self::JoinBlock(statement) => statement.position(),
             Self::SplitBlock(statement) => statement.position(),
+            Self::ConvertOwnedIntoMemoryBlock(statement) => statement.position(),
             Self::MovePlace(statement) => statement.position(),
             Self::CopyPlace(statement) => statement.position(),
             Self::WritePlace(statement) => statement.position(),
             Self::WriteAddress(statement) => statement.position(),
+            Self::Assign(statement) => statement.position(),
+            Self::Consume(statement) => statement.position(),
         }
     }
 }
@@ -32,6 +36,12 @@ impl Positioned for Inhale {
 }
 
 impl Positioned for Exhale {
+    fn position(&self) -> Position {
+        self.position
+    }
+}
+
+impl Positioned for Assert {
     fn position(&self) -> Position {
         self.position
     }
@@ -61,6 +71,12 @@ impl Positioned for SplitBlock {
     }
 }
 
+impl Positioned for ConvertOwnedIntoMemoryBlock {
+    fn position(&self) -> Position {
+        self.position
+    }
+}
+
 impl Positioned for MovePlace {
     fn position(&self) -> Position {
         self.position
@@ -80,6 +96,18 @@ impl Positioned for WritePlace {
 }
 
 impl Positioned for WriteAddress {
+    fn position(&self) -> Position {
+        self.position
+    }
+}
+
+impl Positioned for Assign {
+    fn position(&self) -> Position {
+        self.position
+    }
+}
+
+impl Positioned for Consume {
     fn position(&self) -> Position {
         self.position
     }

@@ -48,9 +48,14 @@ pub(in super::super::super) trait DomainsLowererInterface {
         domain_name: &str,
         axiom: vir_low::DomainAxiomDecl,
     ) -> SpannedEncodingResult<()>;
+    fn insert_domain_function(
+        &mut self,
+        domain_name: &str,
+        domain_function: vir_low::DomainFunctionDecl,
+    ) -> SpannedEncodingResult<()>;
     fn declare_domain_function(
         &mut self,
-        domain_name: std::borrow::Cow<'_, String>,
+        domain_name: &str,
         function_name: std::borrow::Cow<'_, String>,
         parameters: std::borrow::Cow<'_, Vec<vir_low::VariableDecl>>,
         return_type: std::borrow::Cow<'_, vir_low::Type>,
@@ -69,6 +74,14 @@ pub(in super::super::super) trait DomainsLowererInterface {
         base: vir_low::Expression,
         base_type: &vir_mid::Type,
         field: &vir_mid::FieldDecl,
+        position: vir_mid::Position,
+    ) -> SpannedEncodingResult<vir_low::ast::expression::Expression>;
+    fn encode_variant_access_function_app(
+        &mut self,
+        domain_name: &str,
+        base: vir_low::Expression,
+        base_type: &vir_mid::Type,
+        variant: &vir_mid::ty::VariantIndex,
         position: vir_mid::Position,
     ) -> SpannedEncodingResult<vir_low::ast::expression::Expression>;
 }
@@ -91,9 +104,27 @@ impl<'p, 'v: 'p, 'tcx: 'v> DomainsLowererInterface for Lowerer<'p, 'v, 'tcx> {
         domain.axioms.push(axiom);
         Ok(())
     }
+    fn insert_domain_function(
+        &mut self,
+        domain_name: &str,
+        domain_function: vir_low::DomainFunctionDecl,
+    ) -> SpannedEncodingResult<()> {
+        assert!(
+            !self.domains_state.functions.contains(&domain_function.name),
+            "already exists: {}",
+            domain_function.name
+        );
+        self.domains_state
+            .functions
+            .insert(domain_function.name.clone());
+        let domain_name = domain_name.to_string();
+        let domain = self.borrow_domain(domain_name)?;
+        domain.functions.push(domain_function);
+        Ok(())
+    }
     fn declare_domain_function(
         &mut self,
-        domain_name: std::borrow::Cow<'_, String>,
+        domain_name: &str,
         function_name: std::borrow::Cow<'_, String>,
         parameters: std::borrow::Cow<'_, Vec<vir_low::VariableDecl>>,
         return_type: std::borrow::Cow<'_, vir_low::Type>,
@@ -104,12 +135,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> DomainsLowererInterface for Lowerer<'p, 'v, 'tcx> {
                 parameters: parameters.into_owned(),
                 return_type: return_type.into_owned(),
             };
-            self.domains_state
-                .functions
-                .insert(function_name.to_string());
-            let domain_name = domain_name.into_owned();
-            let domain = self.borrow_domain(domain_name)?;
-            domain.functions.push(domain_function);
+            self.insert_domain_function(domain_name, domain_function)?;
         }
         Ok(())
     }
@@ -126,7 +152,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> DomainsLowererInterface for Lowerer<'p, 'v, 'tcx> {
         let function_name = function_name.to_string();
         let parameters = self.create_parameters(&arguments);
         self.declare_domain_function(
-            std::borrow::Cow::Borrowed(&domain_name),
+            &domain_name,
             std::borrow::Cow::Borrowed(&function_name),
             std::borrow::Cow::Borrowed(&parameters),
             std::borrow::Cow::Borrowed(&return_type),
@@ -157,6 +183,29 @@ impl<'p, 'v: 'p, 'tcx: 'v> DomainsLowererInterface for Lowerer<'p, 'v, 'tcx> {
                 domain_name.to_lowercase(),
                 base_type_identifier,
                 field.name
+            ),
+            vec![base],
+            return_type,
+            position,
+        )
+    }
+    fn encode_variant_access_function_app(
+        &mut self,
+        domain_name: &str,
+        base: vir_low::Expression,
+        base_type: &vir_mid::Type,
+        variant: &vir_mid::ty::VariantIndex,
+        position: vir_mid::Position,
+    ) -> SpannedEncodingResult<vir_low::ast::expression::Expression> {
+        let base_type_identifier = base_type.get_identifier();
+        let return_type = self.domain_type(domain_name)?;
+        self.create_domain_func_app(
+            domain_name,
+            format!(
+                "variant_{}$${}$${}",
+                domain_name.to_lowercase(),
+                base_type_identifier,
+                variant.index
             ),
             vec![base],
             return_type,

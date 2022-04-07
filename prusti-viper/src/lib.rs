@@ -10,13 +10,12 @@
 #![feature(bool_to_option)]
 #![feature(try_blocks)]
 #![feature(never_type)]
+#![feature(btree_drain_filter)]
 
 #![deny(unused_must_use)]
 #![deny(unreachable_patterns)]
-// #![deny(unused_mut)]
-// #![deny(unused_variables)]
-// #![deny(unused_imports)]
-// #![deny(unused_doc_comments)]
+// This Clippy chcek seems to be always wrong.
+#![allow(clippy::iter_with_drain)]
 
 extern crate rustc_middle;
 extern crate rustc_hir;
@@ -27,6 +26,7 @@ extern crate rustc_target;
 extern crate rustc_attr;
 extern crate rustc_data_structures;
 extern crate lazy_static;
+extern crate rustc_hash;
 
 pub mod encoder;
 mod utils;

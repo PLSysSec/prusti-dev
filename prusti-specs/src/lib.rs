@@ -3,6 +3,8 @@
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(if_let_guard)]
+// This Clippy chcek seems to be always wrong.
+#![allow(clippy::iter_with_drain)]
 
 #[macro_use]
 mod parse_quote_spanned;
@@ -14,7 +16,7 @@ mod spec_attribute_kind;
 pub mod specifications;
 
 use proc_macro2::{Span, TokenStream, TokenTree};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote_spanned, ToTokens};
 use syn::spanned::Spanned;
 use std::convert::TryInto;
 
@@ -23,6 +25,7 @@ use specifications::untyped;
 use parse_closure_macro::ClosureWithSpec;
 pub use spec_attribute_kind::SpecAttributeKind;
 use prusti_utils::force_matches;
+pub use extern_spec_rewriter::ExternSpecKind;
 
 macro_rules! handle_result {
     ($parse_result: expr) => {
@@ -44,7 +47,8 @@ fn extract_prusti_attributes(
                 let tokens = match attr_kind {
                     SpecAttributeKind::Requires
                     | SpecAttributeKind::Ensures
-                    | SpecAttributeKind::AfterExpiry => {
+                    | SpecAttributeKind::AfterExpiry
+                    | SpecAttributeKind::AssertOnExpiry => {
                         // We need to drop the surrounding parenthesis to make the
                         // tokens identical to the ones passed by the native procedural
                         // macro call.
@@ -129,6 +133,7 @@ fn generate_spec_and_assertions(
             SpecAttributeKind::Requires => generate_for_requires(attr_tokens, item),
             SpecAttributeKind::Ensures => generate_for_ensures(attr_tokens, item),
             SpecAttributeKind::AfterExpiry => generate_for_after_expiry(attr_tokens, item),
+            SpecAttributeKind::AssertOnExpiry => generate_for_assert_on_expiry(attr_tokens, item),
             SpecAttributeKind::Pure => generate_for_pure(attr_tokens, item),
             SpecAttributeKind::Trusted => generate_for_trusted(attr_tokens, item),
             // Predicates are handled separately below; the entry in the SpecAttributeKind enum
@@ -192,6 +197,25 @@ fn generate_for_after_expiry(attr: TokenStream, item: &untyped::AnyFnItem) -> Ge
         vec![spec_item],
         vec![parse_quote_spanned! {item.span()=>
             #[prusti::pledge_spec_id_ref = #spec_id_str]
+        }],
+    ))
+}
+
+/// Generate spec items and attributes to typecheck and later retrieve "after_expiry" annotations.
+fn generate_for_assert_on_expiry(attr: TokenStream, item: &untyped::AnyFnItem) -> GeneratedResult {
+    let mut rewriter = rewriter::AstRewriter::new();
+    let spec_id_lhs = rewriter.generate_spec_id();
+    let spec_id_lhs_str = spec_id_lhs.to_string();
+    let spec_id_rhs = rewriter.generate_spec_id();
+    let spec_id_rhs_str = spec_id_rhs.to_string();
+    let (spec_item_lhs, spec_item_rhs) = rewriter.process_assert_pledge(spec_id_lhs, spec_id_rhs, attr, item)?;
+    Ok((
+        vec![spec_item_lhs, spec_item_rhs],
+        vec![parse_quote_spanned! {item.span()=>
+            #[prusti::assert_pledge_spec_id_ref_lhs = #spec_id_lhs_str]
+        },
+        parse_quote_spanned! {item.span()=>
+            #[prusti::assert_pledge_spec_id_ref_rhs = #spec_id_rhs_str]
         }],
     ))
 }
@@ -396,36 +420,15 @@ pub fn refine_trait_spec(_attr: TokenStream, tokens: TokenStream) -> TokenStream
 
 pub fn extern_spec(_attr: TokenStream, tokens:TokenStream) -> TokenStream {
     let item: syn::Item = handle_result!(syn::parse2(tokens));
-    let item_span = item.span();
     match item {
-        syn::Item::Impl(mut item_impl) => {
-            let new_struct = handle_result!(
-                extern_spec_rewriter::generate_new_struct(&item_impl)
-            );
-
-            let struct_ident = &new_struct.ident;
-            let generic_args = extern_spec_rewriter::rewrite_generics(&new_struct.generics);
-
-            let struct_ty: syn::Type = parse_quote_spanned! {item_span=>
-                #struct_ident #generic_args
-            };
-
-            let rewritten_item = handle_result!(
-                extern_spec_rewriter::rewrite_impl(&mut item_impl, Box::from(struct_ty))
-            );
-
-            quote_spanned! {item_span=>
-                #new_struct
-                #rewritten_item
-            }
+        syn::Item::Impl(item_impl) => {
+            handle_result!(extern_spec_rewriter::impls::rewrite_extern_spec(&item_impl))
+        }
+        syn::Item::Trait(item_trait) => {
+            handle_result!(extern_spec_rewriter::traits::rewrite_extern_spec(&item_trait))
         }
         syn::Item::Mod(mut item_mod) => {
-            let mut path = syn::Path {
-                leading_colon: None,
-                segments: syn::punctuated::Punctuated::new(),
-            };
-            handle_result!(extern_spec_rewriter::rewrite_mod(&mut item_mod, &mut path));
-            quote!(#item_mod)
+            handle_result!(extern_spec_rewriter::mods::rewrite_extern_spec(&mut item_mod))
         }
         _ => { unimplemented!() }
     }
@@ -446,7 +449,11 @@ impl syn::parse::Parse for PredicateFn {
         let _brace_token = syn::braced!(brace_content in input);
         let body = brace_content.parse()?;
 
-        Ok(PredicateFn { visibility, fn_sig, body })
+        Ok(PredicateFn {
+            visibility,
+            fn_sig,
+            body,
+        })
     }
 }
 

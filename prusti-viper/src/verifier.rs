@@ -23,7 +23,7 @@ use viper::{self, PersistentCache, Viper};
 
 use prusti_interface::specs::typed;
 use ::log::{info, debug, error};
-use prusti_server::{VerificationRequest, PrustiClient, process_verification_request_cache, spawn_server_thread};
+use prusti_server::{VerificationRequest, PrustiClient, process_verification_request, spawn_server_thread};
 use rustc_span::DUMMY_SP;
 use prusti_server::tokio::runtime::Builder;
 
@@ -146,7 +146,7 @@ where
 impl<'v, 'tcx> Verifier<'v, 'tcx> {
     pub fn new(
         env: &'v Environment<'tcx>,
-        def_spec: &'v typed::DefSpecificationMap,
+        def_spec: typed::DefSpecificationMap,
     ) -> Self {
         Verifier {
             env,
@@ -321,7 +321,7 @@ impl<'v, 'tcx> Verifier<'v, 'tcx> {
                     if let Some(def_id) = error_manager.get_def_id(&verification_error) {
                         let counterexample = counterexample_translation::backtranslate(
                             &self.encoder,
-                            *def_id,
+                            def_id,
                             silicon_counterexample,
                         );
                         prusti_error = counterexample.annotate_error(prusti_error);
@@ -422,7 +422,7 @@ fn verify_programs(env: &Environment, programs: Vec<Program>)
         stopwatch.finish();
         let mut cache = PersistentCache::load_cache(config::cache_path());
         verification_requests.map(|(program_name, request)| {
-            let result = process_verification_request_cache(&viper_thread, request, &mut cache);
+            let result = process_verification_request(&viper_thread, request, &mut cache);
             (program_name, result)
         }).collect()
     }

@@ -18,6 +18,7 @@ pub enum BuiltinMethodKind {
     HavocInt,
     HavocF32,
     HavocF64,
+    HavocBV(vir::BitVector),
     HavocRef,
 }
 
@@ -70,6 +71,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> BuiltinEncoder<'p, 'v, 'tcx> {
         match method {
             BuiltinMethodKind::HavocBool => "builtin$havoc_bool".to_string(),
             BuiltinMethodKind::HavocInt => "builtin$havoc_int".to_string(),
+            BuiltinMethodKind::HavocBV(variant)  => format!("builtin$havoc_{}", variant),
             BuiltinMethodKind::HavocF32 => "builtin$havoc_f32".to_string(),
             BuiltinMethodKind::HavocF64 => "builtin$havoc_f64".to_string(),
             BuiltinMethodKind::HavocRef => "builtin$havoc_ref".to_string(),
@@ -80,6 +82,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> BuiltinEncoder<'p, 'v, 'tcx> {
         let return_type = match method {
             BuiltinMethodKind::HavocBool => vir::Type::Bool,
             BuiltinMethodKind::HavocInt => vir::Type::Int,
+            BuiltinMethodKind::HavocBV(variant) => vir::Type::BitVector(variant),
             BuiltinMethodKind::HavocF32 => vir::Type::Float(vir::Float::F32),
             BuiltinMethodKind::HavocF64 => vir::Type::Float(vir::Float::F64),
             BuiltinMethodKind::HavocRef => vir::Type::typed_ref(""),

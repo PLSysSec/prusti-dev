@@ -71,6 +71,7 @@ pub enum Expr {
     Downcast(Box<Expr>, Box<Expr>, Field),
     /// Snapshot call to convert from a Ref to a snapshot value
     SnapApp(Box<Expr>, Position),
+    Cast(CastKind, Box<Expr>, Position),
 }
 
 /// A component that can be used to represent a place as a vector.
@@ -122,18 +123,21 @@ pub enum ContainerOpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CastKind {
+    BVIntoInt(BitVector),
+    IntIntoBV(BitVector),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FloatConst {
     F32(u32),
     F64(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BitVectorConst {
-    BV8(u8),
-    BV16(u16),
-    BV32(u32),
-    BV64(u64),
-    BV128(u128),
+pub struct BitVectorConst {
+    pub value: String,
+    pub typ: BitVector,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -295,6 +299,7 @@ impl fmt::Display for Expr {
             }
 
             Expr::SnapApp(ref expr, _) => write!(f, "snap({})", expr),
+            Expr::Cast(ref kind, ref base, _) => write!(f, "cast<{:?}>({})", kind, base),
         }
     }
 }
@@ -375,6 +380,7 @@ impl Expr {
             | Expr::InhaleExhale(_, _, p)
             | Expr::ContainerOp(_, _, _, p)
             | Expr::Seq(_, _, p)
+            | Expr::Cast(_, _, p)
             | Expr::SnapApp(_, p) => *p,
             // TODO Expr::DomainFuncApp(_, _, _, _, _, p) => p,
             Expr::Downcast(box ref base, ..) => base.pos(),
@@ -1152,11 +1158,46 @@ impl Expr {
                 Const::Int(..) | Const::BigInt(..) => &Type::Int,
                 Const::Float(FloatConst::F32(..)) => &Type::Float(Float::F32),
                 Const::Float(FloatConst::F64(..)) => &Type::Float(Float::F64),
-                Const::BitVector(BitVectorConst::BV8(..)) => &Type::BitVector(BitVector::BV8),
-                Const::BitVector(BitVectorConst::BV16(..)) => &Type::BitVector(BitVector::BV16),
-                Const::BitVector(BitVectorConst::BV32(..)) => &Type::BitVector(BitVector::BV32),
-                Const::BitVector(BitVectorConst::BV64(..)) => &Type::BitVector(BitVector::BV64),
-                Const::BitVector(BitVectorConst::BV128(..)) => &Type::BitVector(BitVector::BV128),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV8),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV8)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV16),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV16)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV32),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV32)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV64),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV64)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV128),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV128)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV8),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV8)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV16),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV16)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV32),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV32)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV64),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV64)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV128),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV128)),
                 Const::FnPtr => &FN_PTR_TYPE,
             },
             Expr::BinOp(ref kind, box ref base1, box ref base2, _pos) => match kind {
@@ -1210,6 +1251,39 @@ impl Expr {
                 return None;
             }
             Expr::Seq(ref ty, ..) => ty,
+            Expr::Cast(kind, _, _) => match kind {
+                CastKind::BVIntoInt(_) => &Type::Int,
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV8)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV8))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV16)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV16))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV32)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV32))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV64)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV64))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV128)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV128))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV8)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV8))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV16)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV16))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV32)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV32))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV64)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV64))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV128)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV128))
+                }
+            },
         };
         Some(result)
     }
@@ -1630,7 +1704,8 @@ impl Expr {
                     | Expr::Downcast(..)
                     | Expr::ContainerOp(..)
                     | Expr::Seq(..)
-                    | Expr::SnapApp(..) => true.into(),
+                    | Expr::SnapApp(..)
+                    | Expr::Cast(..) => true.into(),
                 }
             }
         }

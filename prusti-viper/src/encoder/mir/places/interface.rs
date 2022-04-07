@@ -1,5 +1,4 @@
 use crate::encoder::{
-    encoder::SubstMap,
     errors::{
         EncodingError, EncodingResult, ErrorCtxt, SpannedEncodingError, SpannedEncodingResult,
         WithSpan,
@@ -8,6 +7,7 @@ use crate::encoder::{
     mir::{constants::ConstantsEncoderInterface, types::MirTypeEncoderInterface},
 };
 use log::debug;
+use prusti_common::config;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir, ty};
 use rustc_span::Span;
@@ -110,8 +110,7 @@ pub(crate) trait PlacesEncoderInterface<'tcx> {
         mir: &mir::Body<'tcx>,
         def_id: DefId,
         operand: &mir::Operand<'tcx>,
-        dst_ty: &ty::Ty<'tcx>,
-        tymap: &SubstMap<'tcx>,
+        dst_ty: ty::Ty<'tcx>,
         span: Span,
     ) -> SpannedEncodingResult<vir_high::Expression>;
 }
@@ -201,8 +200,21 @@ impl<'v, 'tcx: 'v> PlacesEncoderInterface<'tcx> for super::super::super::Encoder
                     let parent_type = self
                         .encode_place_type_high(parent_mir_type)
                         .with_span(span)?;
-                    let encoded_field = self.encode_field(&parent_type, field).with_span(span)?;
-                    expr.field_no_pos(encoded_field)
+                    if parent_type.is_union() {
+                        // We treat union fields as variants.
+                        let union_decl = self.encode_type_def(&parent_type)?.unwrap_union();
+                        let variant = &union_decl.variants[field.index()];
+                        let variant_index: vir_high::ty::VariantIndex = variant.name.clone().into();
+                        let variant_type = parent_type.variant(variant_index.clone());
+                        let variant_expression =
+                            vir_high::Expression::variant_no_pos(expr, variant_index, variant_type);
+                        let encoded_field = variant.fields[0].clone();
+                        variant_expression.field_no_pos(encoded_field)
+                    } else {
+                        let encoded_field =
+                            self.encode_field(&parent_type, field).with_span(span)?;
+                        expr.field_no_pos(encoded_field)
+                    }
                 }
                 mir::ProjectionElem::Index(index) => {
                     debug!("index: {:?}[{:?}]", expr, index);
@@ -346,58 +358,58 @@ impl<'v, 'tcx: 'v> PlacesEncoderInterface<'tcx> for super::super::super::Encoder
         if !op.is_checkable() || !prusti_common::config::check_overflows() {
             Ok(false.into())
         } else {
-            let result = self.encode_binary_op_high(op, left, right, ty)?;
+            let result = self.encode_binary_op_high(op, left, right.clone(), ty)?;
             Ok(match op {
                 mir::BinOp::Add | mir::BinOp::Mul | mir::BinOp::Sub => match ty {
                     // Unsigned
                     vir_high::Type::Int(vir_high::ty::Int::U8) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::u8::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::u8::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::u8::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::u8::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::U16) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::u16::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::u16::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::u16::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::u16::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::U32) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::u32::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::u32::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::u32::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::u32::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::U64) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::u64::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::u64::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::u64::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::u64::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::U128) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::u128::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::u128::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::u128::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::u128::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::Usize) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::usize::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::usize::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::usize::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::usize::MAX.into()),
                     ),
                     // Signed
                     vir_high::Type::Int(vir_high::ty::Int::I8) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::i8::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::i8::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::i8::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::i8::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::I16) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::i16::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::i16::MIN.into()),
+                        vir_high::Expression::less_than(result.clone(), std::i16::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::i16::MIN.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::I32) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::i32::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::i32::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::i32::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::i32::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::I64) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::i64::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::i64::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::i64::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::i64::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::I128) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::i128::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::i128::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::i128::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::i128::MAX.into()),
                     ),
                     vir_high::Type::Int(vir_high::ty::Int::Isize) => vir_high::Expression::or(
-                        vir_high::Expression::less_equals(result.clone(), std::isize::MIN.into()),
-                        vir_high::Expression::greater_equals(result, std::isize::MAX.into()),
+                        vir_high::Expression::less_than(result.clone(), std::isize::MIN.into()),
+                        vir_high::Expression::greater_than(result, std::isize::MAX.into()),
                     ),
 
                     _ => {
@@ -409,9 +421,43 @@ impl<'v, 'tcx: 'v> PlacesEncoderInterface<'tcx> for super::super::super::Encoder
                 },
 
                 mir::BinOp::Shl | mir::BinOp::Shr => {
-                    return Err(EncodingError::unsupported(
-                        "overflow checks on a shift operation are unsupported",
-                    ));
+                    if !config::encode_bitvectors() {
+                        return Err(EncodingError::unsupported(
+                            "overflow checks on a shift operation are unsupported",
+                        ));
+                    }
+                    let size: u32 = match ty {
+                        vir_high::Type::Int(vir_high::ty::Int::U8) => 8,
+                        vir_high::Type::Int(vir_high::ty::Int::U16) => 16,
+                        vir_high::Type::Int(vir_high::ty::Int::U32) => 32,
+                        vir_high::Type::Int(vir_high::ty::Int::U64) => 64,
+                        vir_high::Type::Int(vir_high::ty::Int::U128) => 128,
+                        vir_high::Type::Int(vir_high::ty::Int::Usize) => {
+                            return Err(EncodingError::unsupported(
+                                "unknown size of usize for the overflow check",
+                            ));
+                        }
+                        vir_high::Type::Int(vir_high::ty::Int::I8) => 8,
+                        vir_high::Type::Int(vir_high::ty::Int::I16) => 16,
+                        vir_high::Type::Int(vir_high::ty::Int::I32) => 32,
+                        vir_high::Type::Int(vir_high::ty::Int::I64) => 64,
+                        vir_high::Type::Int(vir_high::ty::Int::I128) => 128,
+                        vir_high::Type::Int(vir_high::ty::Int::Isize) => {
+                            return Err(EncodingError::unsupported(
+                                "unknown size of isize for the overflow check",
+                            ));
+                        }
+                        _ => {
+                            return Err(EncodingError::unsupported(format!(
+                                "overflow checks are unsupported for operation '{:?}' on type '{:?}'",
+                                op, ty,
+                            )));
+                        }
+                    };
+                    vir_high::Expression::or(
+                        vir_high::Expression::less_than(right.clone(), 0.into()),
+                        vir_high::Expression::greater_equals(right, size.into()),
+                    )
                 }
 
                 _ => {
@@ -429,8 +475,7 @@ impl<'v, 'tcx: 'v> PlacesEncoderInterface<'tcx> for super::super::super::Encoder
         mir: &mir::Body<'tcx>,
         def_id: DefId,
         operand: &mir::Operand<'tcx>,
-        dst_ty: &ty::Ty<'tcx>,
-        tymap: &SubstMap<'tcx>,
+        dst_ty: ty::Ty<'tcx>,
         span: Span,
     ) -> SpannedEncodingResult<vir_high::Expression> {
         let src_ty = self.get_operand_type(mir, operand)?;
@@ -496,11 +541,11 @@ impl<'v, 'tcx: 'v> PlacesEncoderInterface<'tcx> for super::super::super::Encoder
                     // Check the cast
                     // FIXME: Should use a high function.
                     let function_name = self
-                        .encode_cast_function_use(src_ty, dst_ty, tymap)
+                        .encode_cast_function_use(src_ty, dst_ty)
                         .with_span(span)?;
-                    let position = self
-                        .error_manager()
-                        .register(span, ErrorCtxt::TypeCast, def_id);
+                    let position =
+                        self.error_manager()
+                            .register_error(span, ErrorCtxt::TypeCast, def_id);
                     let call = vir_high::Expression::function_call(
                         function_name,
                         vec![], // FIXME: This is probably wrong.

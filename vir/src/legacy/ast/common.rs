@@ -129,14 +129,14 @@ impl Ord for PermAmount {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Float {
     F32,
     F64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum BitVector {
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BitVectorSize {
     BV8,
     BV16,
     BV32,
@@ -144,7 +144,34 @@ pub enum BitVector {
     BV128,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl fmt::Display for BitVectorSize {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BitVectorSize::BV8 => write!(f, "BV8"),
+            BitVectorSize::BV16 => write!(f, "BV16"),
+            BitVectorSize::BV32 => write!(f, "BV32"),
+            BitVectorSize::BV64 => write!(f, "BV64"),
+            BitVectorSize::BV128 => write!(f, "BV128"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BitVector {
+    Signed(BitVectorSize),
+    Unsigned(BitVectorSize),
+}
+
+impl fmt::Display for BitVector {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Signed(value) => write!(f, "S{}", value),
+            Self::Unsigned(value) => write!(f, "U{}", value),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Type {
     Int,
     Bool,
@@ -177,12 +204,7 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::Float(Float::F32) => write!(f, "F32"),
             Type::Float(Float::F64) => write!(f, "F64"),
-            Type::BitVector(BitVector::BV8) => write!(f, "BV8"),
-            Type::BitVector(BitVector::BV16) => write!(f, "BV16"),
-            Type::BitVector(BitVector::BV32) => write!(f, "BV32"),
-            Type::BitVector(BitVector::BV64) => write!(f, "BV64"),
-            Type::BitVector(BitVector::BV128) => write!(f, "BV128"),
-            //Type::Ref => write!(f, "Ref"),
+            Type::BitVector(value) => write!(f, "{}", value),
             Type::TypedRef(ref name) => write!(f, "Ref({})", name),
             Type::Domain(ref name) => write!(f, "Domain({})", name),
             Type::Snapshot(ref name) => write!(f, "Snapshot({})", name),
@@ -210,11 +232,7 @@ impl Type {
             Type::Int => "int".to_string(),
             Type::Float(Float::F32) => "f32".to_string(),
             Type::Float(Float::F64) => "f64".to_string(),
-            Type::BitVector(BitVector::BV8) => "bv8".to_string(),
-            Type::BitVector(BitVector::BV16) => "bv16".to_string(),
-            Type::BitVector(BitVector::BV32) => "bv32".to_string(),
-            Type::BitVector(BitVector::BV64) => "bv64".to_string(),
-            Type::BitVector(BitVector::BV128) => "bv128".to_string(),
+            Type::BitVector(value) => value.to_string(),
             Type::TypedRef(ref pred_name) => pred_name.to_string(),
             Type::Domain(ref pred_name) => pred_name.to_string(),
             Type::Snapshot(ref pred_name) => pred_name.to_string(),
@@ -260,20 +278,6 @@ impl Type {
             Type::Snapshot(_) => TypeId::Snapshot,
             Type::Seq(_) => TypeId::Seq,
         }
-    }
-}
-
-impl PartialEq for Type {
-    fn eq(&self, other: &Self) -> bool {
-        discriminant(self) == discriminant(other)
-    }
-}
-
-impl Eq for Type {}
-
-impl Hash for Type {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        discriminant(self).hash(state);
     }
 }
 

@@ -27,8 +27,10 @@ impl IntoPredicates for vir_high::TypeDecl {
             vir_high::TypeDecl::Tuple(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Struct(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Enum(ty_decl) => ty_decl.lower(ty, encoder),
+            vir_high::TypeDecl::Union(_ty_decl) => unreachable!("Unions are not supported"),
             vir_high::TypeDecl::Array(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Reference(ty_decl) => ty_decl.lower(ty, encoder),
+            vir_high::TypeDecl::Pointer(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Never => construct_never_predicate(encoder),
             vir_high::TypeDecl::Closure(ty_decl) => ty_decl.lower(ty, encoder),
             vir_high::TypeDecl::Unsupported(ty_decl) => ty_decl.lower(ty, encoder),
@@ -139,7 +141,8 @@ impl IntoPredicates for vir_high::type_decl::Enum {
     ) -> Predicates {
         let lower_type = ty.lower(encoder);
 
-        let discriminant_field = vir_high::FieldDecl::discriminant().lower(encoder);
+        let discriminant_field =
+            vir_high::FieldDecl::discriminant(vir_high::Type::MInt).lower(encoder);
         let this = Predicate::construct_this(lower_type);
         let discriminant_loc = vir_poly::Expr::from(this.clone()).field(discriminant_field.clone());
 
@@ -186,6 +189,18 @@ impl IntoPredicates for vir_high::type_decl::Reference {
     ) -> Predicates {
         let field = create_value_field(ty.clone())?.lower(encoder);
         let predicate = Predicate::new_struct(ty.lower(encoder), vec![field]);
+        Ok(vec![predicate])
+    }
+}
+
+impl IntoPredicates for vir_high::type_decl::Pointer {
+    fn lower(
+        &self,
+        ty: &vir_high::Type,
+        encoder: &impl HighTypeEncoderInterfacePrivate,
+    ) -> Predicates {
+        // Pointers are unsupported.
+        let predicate = Predicate::new_abstract(ty.lower(encoder));
         Ok(vec![predicate])
     }
 }

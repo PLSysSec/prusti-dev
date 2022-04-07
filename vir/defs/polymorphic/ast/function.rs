@@ -112,6 +112,7 @@ pub fn compute_identifier(
             Type::Bool => "$bool$".to_string(),
             Type::Float(Float::F32) => "$f32$".to_string(),
             Type::Float(Float::F64) => "$f64$".to_string(),
+            Type::BitVector(value) => format!("${}$", value),
             Type::TypedRef(_) | Type::TypeVar(_) => typ.encode_as_string(),
             Type::Domain(_) => typ.name(),
             Type::Snapshot(_) => format!("Snap${}", typ.name()),

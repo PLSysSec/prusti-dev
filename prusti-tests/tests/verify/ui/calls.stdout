@@ -1,4 +1,4 @@
-// compile-flags: -Pprint_desugared_specs=true -Pprint_typeckd_specs=true -Phide_uuids=true
+// compile-flags: -Pprint_desugared_specs=true -Pprint_typeckd_specs=true -Phide_uuids=true -Poptimizations=none
 // normalize-stdout-test: "[a-z0-9]{32}" -> "$(NUM_UUID)"
 // normalize-stdout-test: "[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}" -> "$(UUID)"
 // normalize-stdout-test: "/[[a-z0-9]{4}/]::" -> "[$(CRATE_ID)]::"
@@ -27,16 +27,14 @@ use prusti_contracts::*;
 #[prusti::spec_only]
 #[prusti::spec_id = "$(NUM_UUID)"]
 fn prusti_post_item_max_$(NUM_UUID)(a: i32, b: i32,
-                                                         result: i32)
- -> bool {
+    result: i32) -> bool {
     !!((result == a || result == b): bool)
 }
 #[allow(unused_must_use, unused_parens, unused_variables, dead_code)]
 #[prusti::spec_only]
 #[prusti::spec_id = "$(NUM_UUID)"]
 fn prusti_post_item_max_$(NUM_UUID)(a: i32, b: i32,
-                                                         result: i32)
- -> bool {
+    result: i32) -> bool {
     !!((result >= a && result >= b): bool)
 }
 #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
@@ -58,11 +56,11 @@ fn test_max2() {
 #[prusti::spec_only]
 #[prusti::spec_id = "$(NUM_UUID)"]
 fn prusti_post_item_test_max3_$(NUM_UUID)(result: i32)
- -> bool {
+    -> bool {
     !!((true && ((!(true) || (result == 3))) && (true || false)): bool)
 }
 #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
 fn test_max3() -> i32 { let a = 4; let b = 3; max(a, b) }
 fn main() {}
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:10 ~ calls[$(CRATE_ID)]::prusti_post_item_test_max3_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:7 ~ calls[$(CRATE_ID)]::prusti_post_item_max_$(NUM_UUID)), DefId(0:8 ~ calls[$(CRATE_ID)]::prusti_post_item_max_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:10 ~ calls[$(CRATE_ID)]::prusti_post_item_test_max3_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:7 ~ calls[$(CRATE_ID)]::prusti_post_item_max_$(NUM_UUID)), DefId(0:8 ~ calls[$(CRATE_ID)]::prusti_post_item_max_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })

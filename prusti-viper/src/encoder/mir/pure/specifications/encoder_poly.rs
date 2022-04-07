@@ -5,7 +5,6 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use crate::encoder::{
-    encoder::SubstMap,
     errors::{EncodingError, EncodingResult, SpannedEncodingResult, WithSpan},
     high::types::HighTypeEncoderInterface,
     mir::{
@@ -18,7 +17,7 @@ use crate::encoder::{
 use prusti_common::config;
 use rustc_hash::FxHashSet;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty;
+use rustc_middle::{ty, ty::subst::SubstsRef};
 use rustc_span::{MultiSpan, Span};
 use vir_crate::polymorphic::ExprIterator;
 
@@ -31,16 +30,16 @@ pub(super) fn inline_closure<'tcx>(
     cl_expr: vir_crate::polymorphic::Expr,
     args: Vec<vir_crate::polymorphic::LocalVar>,
     parent_def_id: DefId,
-    tymap: &SubstMap<'tcx>,
+    substs: SubstsRef<'tcx>,
 ) -> SpannedEncodingResult<vir_crate::polymorphic::Expr> {
-    let mir = encoder.env().local_mir(def_id.expect_local());
+    let mir = encoder.env().local_mir(def_id.expect_local(), substs);
     assert_eq!(mir.arg_count, args.len() + 1);
     let mir_encoder = MirEncoder::new(encoder, &mir, def_id);
     let mut body_replacements = vec![];
     for (arg_idx, arg_local) in mir.args_iter().enumerate() {
+        let local_span = mir_encoder.get_local_span(arg_local);
         let local = mir_encoder.encode_local(arg_local).unwrap();
         let local_ty = mir.local_decls[arg_local].ty;
-        let local_span = mir_encoder.get_local_span(arg_local);
         body_replacements.push((
             encoder
                 .encode_value_expr(vir_crate::polymorphic::Expr::local(local), local_ty)
@@ -53,11 +52,12 @@ pub(super) fn inline_closure<'tcx>(
         ));
     }
     Ok(encoder
-        .encode_pure_expression(def_id, parent_def_id, tymap)?
+        .encode_pure_expression(def_id, parent_def_id, substs)?
         .replace_multiple_places(&body_replacements))
 }
 
 #[allow(clippy::unnecessary_unwrap)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn inline_spec_item<'tcx>(
     encoder: &Encoder<'_, 'tcx>,
     def_id: DefId,
@@ -65,9 +65,11 @@ pub(super) fn inline_spec_item<'tcx>(
     target_return: Option<&vir_crate::polymorphic::Expr>,
     targets_are_values: bool,
     parent_def_id: DefId,
-    tymap: &SubstMap<'tcx>,
+    substs: SubstsRef<'tcx>,
 ) -> SpannedEncodingResult<vir_crate::polymorphic::Expr> {
-    let mir = encoder.env().local_mir(def_id.expect_local());
+    assert_eq!(substs.len(), encoder.env().identity_substs(def_id).len());
+
+    let mir = encoder.env().local_mir(def_id.expect_local(), substs);
     assert_eq!(
         mir.arg_count,
         target_args.len() + if target_return.is_some() { 1 } else { 0 }
@@ -76,12 +78,8 @@ pub(super) fn inline_spec_item<'tcx>(
     let mut body_replacements = vec![];
     for (arg_idx, arg_local) in mir.args_iter().enumerate() {
         let local_span = mir_encoder.get_local_span(arg_local);
-        let mut local = mir_encoder.encode_local(arg_local).unwrap();
-        let local_ty = encoder.resolve_typaram(mir.local_decls[arg_local].ty, tymap);
-        // FIXME: `local` should be encoded with the substitution already applied
-        //        -> `mir_encoder` should take a `tymep`?
-        //        for now we replace the type of the encoded local
-        local.typ = encoder.encode_type(local_ty).with_span(local_span)?;
+        let local = mir_encoder.encode_local(arg_local).unwrap();
+        let local_ty = mir.local_decls[arg_local].ty;
         body_replacements.push((
             if targets_are_values {
                 encoder
@@ -98,18 +96,17 @@ pub(super) fn inline_spec_item<'tcx>(
         ));
     }
     Ok(encoder
-        .encode_pure_expression(def_id, parent_def_id, tymap)?
+        .encode_pure_expression(def_id, parent_def_id, substs)?
         .replace_multiple_places(&body_replacements))
 }
 
 pub(super) fn encode_quantifier<'tcx>(
     encoder: &Encoder<'_, 'tcx>,
     _span: Span,
-    substs: ty::subst::SubstsRef<'tcx>,
     encoded_args: Vec<vir_crate::polymorphic::Expr>,
     is_exists: bool,
     parent_def_id: DefId,
-    tymap: &SubstMap<'tcx>,
+    substs: ty::subst::SubstsRef<'tcx>,
 ) -> SpannedEncodingResult<vir_crate::polymorphic::Expr> {
     let tcx = encoder.env().tcx();
 
@@ -126,11 +123,11 @@ pub(super) fn encode_quantifier<'tcx>(
     //   )
 
     let cl_type_body = substs.type_at(1);
-    let (body_def_id, _, args, _) = extract_closure_from_ty(tcx, cl_type_body);
+    let (body_def_id, body_substs, _, args, _) = extract_closure_from_ty(tcx, cl_type_body);
 
     let mut encoded_qvars = vec![];
     let mut bounds = vec![];
-    for (arg_idx, arg_ty) in args.iter().enumerate() {
+    for (arg_idx, arg_ty) in args.into_iter().enumerate() {
         let qvar_ty = encoder.encode_type(arg_ty).unwrap();
         let qvar_name = format!(
             "_{}_quant_{}",
@@ -151,18 +148,23 @@ pub(super) fn encode_quantifier<'tcx>(
     }
 
     let mut encoded_trigger_sets = vec![];
-    for (trigger_set_idx, ty_trigger_set) in substs.type_at(0).tuple_fields().enumerate() {
+    for (trigger_set_idx, ty_trigger_set) in
+        substs.type_at(0).tuple_fields().into_iter().enumerate()
+    {
         let mut encoded_triggers = vec![];
         let mut set_spans = vec![];
-        for (trigger_idx, ty_trigger) in ty_trigger_set.tuple_fields().enumerate() {
-            let (trigger_def_id, trigger_span, _, _) = extract_closure_from_ty(tcx, ty_trigger);
+        for (trigger_idx, ty_trigger) in ty_trigger_set.tuple_fields().into_iter().enumerate() {
+            let (trigger_def_id, trigger_substs, trigger_span, _, _) =
+                extract_closure_from_ty(tcx, ty_trigger);
             let set_field = encoder
                 .encode_raw_ref_field(format!("tuple_{}", trigger_set_idx), ty_trigger_set)
                 .with_span(trigger_span)?;
             let trigger_field = encoder
                 .encode_raw_ref_field(format!("tuple_{}", trigger_idx), ty_trigger)
                 .with_span(trigger_span)?;
-            let encoded_trigger = inline_closure(
+            // note: `is_encoding_trigger` must be set back to `false` before returning early in case of errors
+            encoder.is_encoding_trigger.set(true);
+            let encoded_trigger_result = inline_closure(
                 encoder,
                 trigger_def_id,
                 encoded_args[0]
@@ -171,8 +173,23 @@ pub(super) fn encode_quantifier<'tcx>(
                     .field(trigger_field),
                 encoded_qvars.clone(),
                 parent_def_id,
-                tymap,
-            )?;
+                trigger_substs,
+            );
+            encoder.is_encoding_trigger.set(false);
+            let mut encoded_trigger = encoded_trigger_result?;
+
+            // slice accesses and other pure calls can get encoded as
+            // `foo(...).val_X` but for triggers we need to strip the field
+            // access away
+            // TODO(tymap): this also strip out user-written field accesses...
+            while let vir_crate::polymorphic::Expr::Field(vir_crate::polymorphic::FieldExpr {
+                base,
+                ..
+            }) = encoded_trigger
+            {
+                encoded_trigger = *base;
+            }
+
             check_trigger(&encoded_trigger).with_span(trigger_span)?;
             encoded_triggers.push(encoded_trigger);
             set_spans.push(trigger_span);
@@ -189,7 +206,7 @@ pub(super) fn encode_quantifier<'tcx>(
         encoded_args[1].clone(),
         encoded_qvars.clone(),
         parent_def_id,
-        tymap,
+        body_substs,
     )?;
 
     // replace qvars with a nicer name based on quantifier depth to ensure that

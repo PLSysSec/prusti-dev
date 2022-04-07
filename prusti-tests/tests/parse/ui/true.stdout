@@ -29,7 +29,7 @@ fn test1() {}
 #[prusti::spec_only]
 #[prusti::spec_id = "$(NUM_UUID)"]
 fn prusti_post_item_test2_$(NUM_UUID)(result: ())
- -> bool {
+    -> bool {
     !!((true): bool)
 }
 #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
@@ -39,14 +39,14 @@ fn test3() {
 
         #[allow(unused_must_use, unused_variables)]
         if false {
-            {
+                {
 
-                #[prusti::spec_only]
-                #[prusti::loop_body_invariant_spec]
-                #[prusti::spec_id = "$(NUM_UUID)"]
-                || -> bool { true };
+                    #[prusti::spec_only]
+                    #[prusti::loop_body_invariant_spec]
+                    #[prusti::spec_id = "$(NUM_UUID)"]
+                    || -> bool { true };
+                }
             }
-        }
     }
 }
 #[allow(unused_must_use, unused_parens, unused_variables, dead_code)]
@@ -59,7 +59,7 @@ fn prusti_pre_item_test4_$(NUM_UUID)() -> bool {
 #[prusti::spec_only]
 #[prusti::spec_id = "$(NUM_UUID)"]
 fn prusti_post_item_test4_$(NUM_UUID)(result: ())
- -> bool {
+    -> bool {
     !!((true): bool)
 }
 #[prusti::pre_spec_id_ref = "$(NUM_UUID)"]
@@ -69,19 +69,19 @@ fn test4() {
 
         #[allow(unused_must_use, unused_variables)]
         if false {
-            {
+                {
 
-                #[prusti::spec_only]
-                #[prusti::loop_body_invariant_spec]
-                #[prusti::spec_id = "$(NUM_UUID)"]
-                || -> bool { true };
+                    #[prusti::spec_only]
+                    #[prusti::loop_body_invariant_spec]
+                    #[prusti::spec_id = "$(NUM_UUID)"]
+                    || -> bool { true };
+                }
             }
-        }
     }
 }
 fn main() {}
 Loop(LoopSpecification { invariant: DefId(0:10 ~ true[$(CRATE_ID)]::test3::{closure#0}) })
 Loop(LoopSpecification { invariant: DefId(0:14 ~ true[$(CRATE_ID)]::test4::{closure#0}) })
-Procedure(ProcedureSpecification { pres: [DefId(0:6 ~ true[$(CRATE_ID)]::prusti_pre_item_test1_$(NUM_UUID))], posts: [], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:8 ~ true[$(CRATE_ID)]::prusti_post_item_test2_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:11 ~ true[$(CRATE_ID)]::prusti_pre_item_test4_$(NUM_UUID))], posts: [DefId(0:12 ~ true[$(CRATE_ID)]::prusti_post_item_test4_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:6 ~ true[$(CRATE_ID)]::prusti_pre_item_test1_$(NUM_UUID))]), posts: Empty, pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:8 ~ true[$(CRATE_ID)]::prusti_post_item_test2_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:11 ~ true[$(CRATE_ID)]::prusti_pre_item_test4_$(NUM_UUID))]), posts: Inherent([DefId(0:12 ~ true[$(CRATE_ID)]::prusti_post_item_test4_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })

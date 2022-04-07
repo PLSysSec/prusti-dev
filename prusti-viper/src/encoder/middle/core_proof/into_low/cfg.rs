@@ -1,16 +1,24 @@
 use super::{IntoLow, IntoLowInterface};
 use crate::encoder::{
     errors::SpannedEncodingResult,
+    high::types::HighTypeEncoderInterface,
     middle::core_proof::{
-        addresses::AddressesInterface, builtin_methods::BuiltinMethodsInterface, lowerer::Lowerer,
-        places::PlacesInterface, predicates_memory_block::PredicatesMemoryBlockInterface,
-        predicates_owned::PredicatesOwnedInterface, snapshots::SnapshotsInterface,
+        addresses::AddressesInterface,
+        block_markers::BlockMarkersInterface,
+        builtin_methods::BuiltinMethodsInterface,
+        lowerer::{Lowerer, VariablesLowererInterface},
+        places::PlacesInterface,
+        predicates_memory_block::PredicatesMemoryBlockInterface,
+        predicates_owned::PredicatesOwnedInterface,
+        snapshots::{
+            IntoSnapshot, SnapshotValidityInterface, SnapshotValuesInterface,
+            SnapshotVariablesInterface,
+        },
     },
 };
-
 use vir_crate::{
     common::identifier::WithIdentifier,
-    low as vir_low,
+    low::{self as vir_low, operations::ToLow},
     middle::{self as vir_mid, operations::ty::Typed},
 };
 
@@ -95,12 +103,35 @@ impl IntoLow for vir_mid::Statement {
         use vir_low::{macros::*, Statement};
         match self {
             Self::Comment(statement) => Ok(vec![Statement::comment(statement.comment)]),
-            Self::Inhale(statement) => Ok(vec![Statement::inhale(
-                statement.predicate.into_low(lowerer)?,
-                statement.position,
-            )]),
-            Self::Exhale(statement) => Ok(vec![Statement::exhale(
-                statement.predicate.into_low(lowerer)?,
+            Self::Inhale(statement) => {
+                if let vir_mid::Predicate::OwnedNonAliased(owned) = &statement.predicate {
+                    lowerer.mark_owned_non_aliased_as_unfolded(owned.place.get_type())?;
+                }
+                Ok(vec![Statement::inhale(
+                    statement.predicate.into_low(lowerer)?,
+                    statement.position,
+                )])
+            }
+            Self::Exhale(statement) => {
+                if let vir_mid::Predicate::OwnedNonAliased(owned) = &statement.predicate {
+                    lowerer.mark_owned_non_aliased_as_unfolded(owned.place.get_type())?;
+                }
+                Ok(vec![Statement::exhale(
+                    statement.predicate.into_low(lowerer)?,
+                    statement.position,
+                )])
+            }
+            Self::Consume(statement) => {
+                let mut statements = Vec::new();
+                lowerer.encode_consume_method_call(
+                    &mut statements,
+                    statement.operand,
+                    statement.position,
+                )?;
+                Ok(statements)
+            }
+            Self::Assert(statement) => Ok(vec![Statement::assert(
+                statement.expression.into_low(lowerer)?,
                 statement.position,
             )]),
             Self::FoldOwned(statement) => {
@@ -109,8 +140,17 @@ impl IntoLow for vir_mid::Statement {
                 let place = lowerer.encode_expression_as_place(&statement.place)?;
                 let address = lowerer.extract_root_address(&statement.place)?;
                 let snapshot = lowerer.lower_expression_into_snapshot(&statement.place)?;
-                let low_statement = stmtp! {
-                    statement.position => fold OwnedNonAliased<ty>([place], [address], [snapshot])
+                let low_statement = if let Some(condition) = statement.condition {
+                    let low_condition = lowerer.lower_block_marker_condition(condition)?;
+                    stmtp! {
+                        statement.position =>
+                        fold<low_condition> OwnedNonAliased<ty>([place], [address], [snapshot])
+                    }
+                } else {
+                    stmtp! {
+                        statement.position =>
+                        fold OwnedNonAliased<ty>([place], [address], [snapshot])
+                    }
                 };
                 Ok(vec![low_statement])
             }
@@ -120,8 +160,17 @@ impl IntoLow for vir_mid::Statement {
                 let place = lowerer.encode_expression_as_place(&statement.place)?;
                 let address = lowerer.extract_root_address(&statement.place)?;
                 let snapshot = lowerer.lower_expression_into_snapshot(&statement.place)?;
-                let low_statement = stmtp! {
-                    statement.position => unfold OwnedNonAliased<ty>([place], [address], [snapshot])
+                let low_statement = if let Some(condition) = statement.condition {
+                    let low_condition = lowerer.lower_block_marker_condition(condition)?;
+                    stmtp! {
+                        statement.position =>
+                        unfold<low_condition> OwnedNonAliased<ty>([place], [address], [snapshot])
+                    }
+                } else {
+                    stmtp! {
+                        statement.position =>
+                        unfold OwnedNonAliased<ty>([place], [address], [snapshot])
+                    }
                 };
                 Ok(vec![low_statement])
             }
@@ -129,8 +178,50 @@ impl IntoLow for vir_mid::Statement {
                 let ty = statement.place.get_type();
                 lowerer.encode_memory_block_join_method(ty)?;
                 let address = lowerer.encode_expression_as_place_address(&statement.place)?;
-                let low_statement = stmtp! {
-                    statement.position => call memory_block_join<ty>([address])
+                let discriminant = if let Some(variant_index) = &statement.enum_variant {
+                    // TODO: Remove code duplication with SplitBlock variant.
+                    let type_decl = lowerer.encoder.get_type_decl_mid(ty)?;
+                    match type_decl {
+                        vir_mid::TypeDecl::Enum(decl) => Some(
+                            decl.get_discriminant(variant_index)
+                                .unwrap()
+                                .clone()
+                                .to_low(lowerer)?,
+                        ),
+                        vir_mid::TypeDecl::Union(decl) => Some(
+                            decl.get_discriminant(variant_index)
+                                .unwrap()
+                                .clone()
+                                .to_low(lowerer)?,
+                        ),
+                        _ => unreachable!("type: {}", type_decl),
+                    }
+                } else {
+                    None
+                };
+                let low_statement = if let Some(condition) = statement.condition {
+                    let low_condition = lowerer.lower_block_marker_condition(condition)?;
+                    if let Some(discriminant) = discriminant {
+                        stmtp! {
+                            statement.position =>
+                            call<low_condition> memory_block_join<ty>([address], [discriminant])
+                        }
+                    } else {
+                        stmtp! {
+                            statement.position =>
+                            call<low_condition> memory_block_join<ty>([address])
+                        }
+                    }
+                } else if let Some(discriminant) = discriminant {
+                    stmtp! {
+                        statement.position =>
+                        call memory_block_join<ty>([address], [discriminant])
+                    }
+                } else {
+                    stmtp! {
+                        statement.position =>
+                        call memory_block_join<ty>([address])
+                    }
                 };
                 Ok(vec![low_statement])
             }
@@ -138,12 +229,68 @@ impl IntoLow for vir_mid::Statement {
                 let ty = statement.place.get_type();
                 lowerer.encode_memory_block_split_method(ty)?;
                 let address = lowerer.encode_expression_as_place_address(&statement.place)?;
-                let low_statement = stmtp! {
-                    statement.position => call memory_block_split<ty>([address])
+                let discriminant = if let Some(variant_index) = &statement.enum_variant {
+                    // TODO: Remove code duplication with JoinBlock variant.
+                    let type_decl = lowerer.encoder.get_type_decl_mid(ty)?;
+                    let enum_decl = type_decl.unwrap_enum();
+                    Some(
+                        enum_decl
+                            .get_discriminant(variant_index)
+                            .unwrap()
+                            .clone()
+                            .to_low(lowerer)?,
+                    )
+                } else {
+                    None
+                };
+                let low_statement = if let Some(condition) = statement.condition {
+                    let low_condition = lowerer.lower_block_marker_condition(condition)?;
+                    if let Some(discriminant) = discriminant {
+                        stmtp! {
+                            statement.position =>
+                            call<low_condition> memory_block_split<ty>([address], [discriminant])
+                        }
+                    } else {
+                        stmtp! {
+                            statement.position =>
+                            call<low_condition> memory_block_split<ty>([address])
+                        }
+                    }
+                } else if let Some(discriminant) = discriminant {
+                    stmtp! {
+                        statement.position =>
+                        call memory_block_split<ty>([address], [discriminant])
+                    }
+                } else {
+                    stmtp! {
+                        statement.position =>
+                        call memory_block_split<ty>([address])
+                    }
+                };
+                Ok(vec![low_statement])
+            }
+            Self::ConvertOwnedIntoMemoryBlock(statement) => {
+                let ty = statement.place.get_type();
+                lowerer.encode_into_memory_block_method(ty)?;
+                let place = lowerer.encode_expression_as_place(&statement.place)?;
+                let address = lowerer.extract_root_address(&statement.place)?;
+                let snapshot = lowerer.lower_expression_into_snapshot(&statement.place)?;
+                let low_statement = if let Some(condition) = statement.condition {
+                    let low_condition = lowerer.lower_block_marker_condition(condition)?;
+                    stmtp! {
+                        statement.position =>
+                        call<low_condition> into_memory_block<ty>([place], [address], [snapshot])
+                    }
+                } else {
+                    stmtp! {
+                        statement.position =>
+                        call into_memory_block<ty>([place], [address], [snapshot])
+                    }
                 };
                 Ok(vec![low_statement])
             }
             Self::MovePlace(statement) => {
+                // TODO: Remove code duplication with Self::CopyPlace
                 let target_ty = statement.target.get_type();
                 let source_ty = statement.source.get_type();
                 assert_eq!(target_ty, source_ty);
@@ -170,8 +317,33 @@ impl IntoLow for vir_mid::Statement {
                 )?;
                 Ok(statements)
             }
-            Self::CopyPlace(_statement) => {
-                unimplemented!();
+            Self::CopyPlace(statement) => {
+                // TODO: Remove code duplication with Self::MovePlace
+                let target_ty = statement.target.get_type();
+                let source_ty = statement.source.get_type();
+                assert_eq!(target_ty, source_ty);
+                lowerer.encode_copy_place_method(target_ty)?;
+                let target_place = lowerer.encode_expression_as_place(&statement.target)?;
+                let target_address = lowerer.extract_root_address(&statement.target)?;
+                let source_place = lowerer.encode_expression_as_place(&statement.source)?;
+                let source_address = lowerer.extract_root_address(&statement.source)?;
+                let value = lowerer.lower_expression_into_snapshot(&statement.source)?;
+                let mut statements = vec![stmtp! { statement.position =>
+                    call copy_place<target_ty>(
+                        [target_place],
+                        [target_address],
+                        [source_place],
+                        [source_address],
+                        [value.clone()]
+                    )
+                }];
+                lowerer.encode_snapshot_update(
+                    &mut statements,
+                    &statement.target,
+                    value,
+                    statement.position,
+                )?;
+                Ok(statements)
             }
             Self::WritePlace(statement) => {
                 let target_ty = statement.target.get_type();
@@ -212,6 +384,16 @@ impl IntoLow for vir_mid::Statement {
                 }];
                 Ok(statements)
             }
+            Self::Assign(statement) => {
+                let mut statements = Vec::new();
+                lowerer.encode_assign_method_call(
+                    &mut statements,
+                    statement.target,
+                    statement.value,
+                    statement.position,
+                )?;
+                Ok(statements)
+            }
         }
     }
 }
@@ -242,6 +424,18 @@ impl IntoLow for vir_mid::Predicate {
             Predicate::MemoryBlockHeapDrop(predicate) => {
                 unimplemented!("predicate: {}", predicate);
             }
+            Predicate::OwnedNonAliased(predicate) => {
+                let place = lowerer.encode_expression_as_place(&predicate.place)?;
+                let address = lowerer.extract_root_address(&predicate.place)?;
+                let snapshot = lowerer.lower_expression_into_snapshot(&predicate.place)?;
+                let ty = predicate.place.get_type();
+                let valid = lowerer.encode_snapshot_valid_call_for_type(snapshot.clone(), ty)?;
+                exprp! {
+                    predicate.position =>
+                    (acc(OwnedNonAliased<ty>([place], [address], [snapshot]))) &&
+                    [valid]
+                }
+            }
         };
         Ok(result)
     }
@@ -264,16 +458,30 @@ impl IntoLow for vir_mid::Successor {
         lowerer: &mut Lowerer<'p, 'v, 'tcx>,
     ) -> SpannedEncodingResult<Self::Target> {
         match self {
-            vir_mid::Successor::Return => Ok(vir_low::Successor::Return),
+            vir_mid::Successor::Exit => Ok(vir_low::Successor::Return),
             vir_mid::Successor::Goto(target) => {
                 Ok(vir_low::Successor::Goto(target.into_low(lowerer)?))
             }
             vir_mid::Successor::GotoSwitch(targets) => {
                 let mut new_targets = Vec::new();
                 for (test, target) in targets {
-                    new_targets.push((test.into_low(lowerer)?, target.into_low(lowerer)?))
+                    let test_snapshot = test.create_snapshot(lowerer)?;
+                    let test_low = lowerer.obtain_constant_value(
+                        test.get_type(),
+                        test_snapshot,
+                        Default::default(),
+                    )?;
+                    new_targets.push((test_low, target.into_low(lowerer)?))
                 }
                 Ok(vir_low::Successor::GotoSwitch(new_targets))
+            }
+            vir_mid::Successor::NonDetChoice(first, second) => {
+                use vir_low::macros::*;
+                let choice = lowerer.create_new_temporary_variable(vir_low::Type::Bool)?;
+                Ok(vir_low::Successor::GotoSwitch(vec![
+                    (expr! { choice }, first.into_low(lowerer)?),
+                    (expr! { !choice }, second.into_low(lowerer)?),
+                ]))
             }
         }
     }

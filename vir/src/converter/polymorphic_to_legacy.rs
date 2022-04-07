@@ -55,12 +55,34 @@ impl From<polymorphic::Float> for legacy::Float {
     }
 }
 
+impl From<polymorphic::BitVectorSize> for legacy::BitVectorSize {
+    fn from(value: polymorphic::BitVectorSize) -> legacy::BitVectorSize {
+        match value {
+            polymorphic::BitVectorSize::BV8 => legacy::BitVectorSize::BV8,
+            polymorphic::BitVectorSize::BV16 => legacy::BitVectorSize::BV16,
+            polymorphic::BitVectorSize::BV32 => legacy::BitVectorSize::BV32,
+            polymorphic::BitVectorSize::BV64 => legacy::BitVectorSize::BV64,
+            polymorphic::BitVectorSize::BV128 => legacy::BitVectorSize::BV128,
+        }
+    }
+}
+
+impl From<polymorphic::BitVector> for legacy::BitVector {
+    fn from(value: polymorphic::BitVector) -> legacy::BitVector {
+        match value {
+            polymorphic::BitVector::Signed(value) => legacy::BitVector::Signed(value.into()),
+            polymorphic::BitVector::Unsigned(value) => legacy::BitVector::Unsigned(value.into()),
+        }
+    }
+}
+
 impl From<polymorphic::Type> for legacy::Type {
     fn from(typ: polymorphic::Type) -> legacy::Type {
         match typ {
             polymorphic::Type::Int => legacy::Type::Int,
             polymorphic::Type::Bool => legacy::Type::Bool,
             polymorphic::Type::Float(float) => legacy::Type::Float(float.into()),
+            polymorphic::Type::BitVector(vector) => legacy::Type::BitVector(vector.into()),
             polymorphic::Type::Seq(seq) => legacy::Type::Seq(Box::new((*seq.typ).into())),
             polymorphic::Type::TypedRef(_) | polymorphic::Type::TypeVar(_) => {
                 legacy::Type::TypedRef(typ.encode_as_string())
@@ -76,6 +98,7 @@ impl From<polymorphic::TypeId> for legacy::TypeId {
         match type_id {
             polymorphic::TypeId::Int => legacy::TypeId::Int,
             polymorphic::TypeId::Bool => legacy::TypeId::Bool,
+            polymorphic::TypeId::BitVector => legacy::TypeId::BitVector,
             polymorphic::TypeId::Float => legacy::TypeId::Float,
             polymorphic::TypeId::Ref => legacy::TypeId::Ref,
             polymorphic::TypeId::Seq => legacy::TypeId::Seq,
@@ -325,6 +348,11 @@ impl From<polymorphic::Expr> for legacy::Expr {
             polymorphic::Expr::SnapApp(snap_app) => {
                 legacy::Expr::SnapApp(Box::new((*snap_app.base).into()), snap_app.position.into())
             }
+            polymorphic::Expr::Cast(cast) => legacy::Expr::Cast(
+                cast.kind.into(),
+                Box::new((*cast.base).into()),
+                cast.position.into(),
+            ),
         }
     }
 }
@@ -368,6 +396,14 @@ impl From<polymorphic::BinaryOpKind> for legacy::BinaryOpKind {
             polymorphic::BinaryOpKind::And => legacy::BinaryOpKind::And,
             polymorphic::BinaryOpKind::Or => legacy::BinaryOpKind::Or,
             polymorphic::BinaryOpKind::Implies => legacy::BinaryOpKind::Implies,
+            polymorphic::BinaryOpKind::BitAnd => legacy::BinaryOpKind::BitAnd,
+            polymorphic::BinaryOpKind::BitOr => legacy::BinaryOpKind::BitOr,
+            polymorphic::BinaryOpKind::BitXor => legacy::BinaryOpKind::BitXor,
+            polymorphic::BinaryOpKind::Shl => legacy::BinaryOpKind::Shl,
+            polymorphic::BinaryOpKind::LShr => legacy::BinaryOpKind::LShr,
+            polymorphic::BinaryOpKind::AShr => legacy::BinaryOpKind::AShr,
+            polymorphic::BinaryOpKind::Min => legacy::BinaryOpKind::Min,
+            polymorphic::BinaryOpKind::Max => legacy::BinaryOpKind::Max,
         }
     }
 }
@@ -382,11 +418,29 @@ impl From<polymorphic::ContainerOpKind> for legacy::ContainerOpKind {
     }
 }
 
+impl From<polymorphic::CastKind> for legacy::CastKind {
+    fn from(container_op_kind: polymorphic::CastKind) -> legacy::CastKind {
+        match container_op_kind {
+            polymorphic::CastKind::BVIntoInt(size) => legacy::CastKind::BVIntoInt(size.into()),
+            polymorphic::CastKind::IntIntoBV(size) => legacy::CastKind::IntIntoBV(size.into()),
+        }
+    }
+}
+
 impl From<polymorphic::FloatConst> for legacy::FloatConst {
     fn from(old: polymorphic::FloatConst) -> legacy::FloatConst {
         match old {
             polymorphic::FloatConst::F32(value) => legacy::FloatConst::F32(value),
             polymorphic::FloatConst::F64(value) => legacy::FloatConst::F64(value),
+        }
+    }
+}
+
+impl From<polymorphic::BitVectorConst> for legacy::BitVectorConst {
+    fn from(old: polymorphic::BitVectorConst) -> legacy::BitVectorConst {
+        legacy::BitVectorConst {
+            value: old.value,
+            typ: old.typ.into(),
         }
     }
 }
@@ -398,6 +452,7 @@ impl From<polymorphic::Const> for legacy::Const {
             polymorphic::Const::Int(i64_value) => legacy::Const::Int(i64_value),
             polymorphic::Const::BigInt(label) => legacy::Const::BigInt(label),
             polymorphic::Const::Float(float_value) => legacy::Const::Float(float_value.into()),
+            polymorphic::Const::BitVector(value) => legacy::Const::BitVector(value.into()),
             polymorphic::Const::FnPtr => legacy::Const::FnPtr,
         }
     }

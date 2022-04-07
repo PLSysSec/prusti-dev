@@ -7,10 +7,12 @@
 use super::interpreter::PureFunctionBackwardInterpreter;
 use crate::encoder::{
     borrows::ProcedureContract,
-    encoder::SubstMap,
     errors::{ErrorCtxt, SpannedEncodingError, SpannedEncodingResult, WithSpan},
     high::{generics::HighGenericsEncoderInterface, types::HighTypeEncoderInterface},
-    mir::pure::SpecificationEncoderInterface,
+    mir::{
+        pure::{PureEncodingContext, SpecificationEncoderInterface},
+        specifications::SpecificationsInterface,
+    },
     mir_encoder::PlaceEncoder,
     mir_interpreter::run_backward_interpretation,
     snapshot::interface::SnapshotEncoderInterface,
@@ -19,10 +21,9 @@ use crate::encoder::{
 use log::{debug, trace};
 use prusti_common::{config, vir::optimizations::functions::Simplifier, vir_local};
 
-use rustc_hash::FxHashMap;
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_middle::{mir, ty};
+use rustc_middle::{mir, ty, ty::subst::SubstsRef};
 use rustc_span::Span;
 
 use vir_crate::{
@@ -37,7 +38,7 @@ pub(super) struct PureFunctionEncoder<'p, 'v: 'p, 'tcx: 'v> {
     mir: &'p mir::Body<'tcx>,
     interpreter: PureFunctionBackwardInterpreter<'p, 'v, 'tcx>,
     parent_def_id: DefId,
-    tymap: &'p SubstMap<'tcx>,
+    substs: SubstsRef<'tcx>,
 }
 
 impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
@@ -45,18 +46,28 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
         encoder: &'p Encoder<'v, 'tcx>,
         proc_def_id: DefId,
         mir: &'p mir::Body<'tcx>,
-        is_encoding_assertion: bool,
+        pure_encoding_context: PureEncodingContext,
         parent_def_id: DefId,
-        tymap: &'p SubstMap<'tcx>,
+        substs: SubstsRef<'tcx>,
     ) -> Self {
         trace!("PureFunctionEncoder constructor: {:?}", proc_def_id);
+
+        let proc_def_id = encoder.get_wrapper_def_id(proc_def_id);
+
+        // should hold for extern specs as well (otherwise there would have
+        // been an error reported earlier)
+        assert_eq!(
+            substs.len(),
+            encoder.env().identity_substs(proc_def_id).len()
+        );
+
         let interpreter = PureFunctionBackwardInterpreter::new(
             encoder,
             mir,
             proc_def_id,
-            is_encoding_assertion,
+            pure_encoding_context,
             parent_def_id,
-            tymap.clone(),
+            substs,
         );
         PureFunctionEncoder {
             encoder,
@@ -64,7 +75,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
             mir,
             interpreter,
             parent_def_id,
-            tymap,
+            substs,
         }
     }
 
@@ -77,15 +88,11 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
             .unwrap_or_else(|| panic!("Procedure {:?} contains a loop", self.proc_def_id));
         let body_expr = state.into_expr().unwrap();
         debug!(
-            "Pure function {} has been encoded with expr: {}",
+            "Pure function body {} has been encoded with expr: {}",
             function_name, body_expr
         );
-        let substs = &self
-            .encoder
-            .type_substitution_polymorphic_type_map(self.tymap)
-            .with_span(self.mir.span)?;
-        let patched_body_expr = body_expr.patch_types(substs);
-        Ok(patched_body_expr)
+
+        Ok(body_expr)
     }
 
     pub fn encode_function(&self) -> SpannedEncodingResult<vir::Function> {
@@ -123,9 +130,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
 
         // if the function returns a snapshot, we take a snapshot of the body
         if self.encode_function_return_type()?.is_snapshot() {
-            let ty = self
-                .encoder
-                .resolve_typaram(self.mir.return_ty(), self.tymap);
+            let ty = self.mir.return_ty();
             let return_span = self.get_local_span(mir::RETURN_PLACE);
 
             let param_env = self.encoder.env().tcx().param_env(self.proc_def_id);
@@ -158,7 +163,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
         let mir_span = self.encoder.env().tcx().def_span(self.proc_def_id);
         let contract = self
             .encoder
-            .get_procedure_contract_for_def(self.proc_def_id)
+            .get_procedure_contract_for_def(self.proc_def_id, self.substs)
             .with_span(mir_span)?;
         let encoded_args = contract
             .args
@@ -172,10 +177,13 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
             &encoded_args,
             None,
             true,
-            ErrorCtxt::GenericExpression,
             self.parent_def_id,
-            self.tymap,
+            self.substs,
         )?;
+        self.encoder.error_manager().set_error(
+            predicate_body_encoded.pos(),
+            ErrorCtxt::PureFunctionDefinition,
+        );
 
         self.encode_function_given_body(Some(predicate_body_encoded))
     }
@@ -200,20 +208,18 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
 
         let contract = self
             .encoder
-            .get_procedure_contract_for_def(self.proc_def_id)
+            .get_procedure_contract_for_def(self.proc_def_id, self.substs)
             .with_span(self.mir.span)?;
-        let substs = &self.encode_substs()?;
 
         let (type_precondition, func_precondition) = self.encode_precondition_expr(&contract)?;
-        let patched_type_precondition = type_precondition.patch_types(substs);
 
-        let mut precondition = vec![patched_type_precondition, func_precondition];
+        let mut precondition = vec![type_precondition, func_precondition];
         let mut postcondition = vec![self.encode_postcondition_expr(&contract)?];
 
         let formal_args = self.encode_formal_args()?;
         let return_type = self.encode_function_return_type()?;
 
-        let res_value_range_pos = self.encoder.error_manager().register(
+        let res_value_range_pos = self.encoder.error_manager().register_error(
             self.mir.span,
             ErrorCtxt::PureFunctionPostconditionValueRangeOfResult,
             self.parent_def_id,
@@ -288,8 +294,32 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
         // Patch snapshots
         function = self
             .encoder
-            .patch_snapshots_function(function, self.tymap)
+            .patch_snapshots_function(function)
             .with_span(self.mir.span)?;
+
+        // Fix arguments
+        if let Some(mut body) = function.body.take() {
+            for arg in self.mir.args_iter() {
+                let arg_ty = self.interpreter.mir_encoder().get_local_ty(arg);
+                let span = self.get_local_span(arg);
+                let target_place = self
+                    .encoder
+                    .encode_value_expr(
+                        vir::Expr::local(self.interpreter.mir_encoder().encode_local(arg)?),
+                        arg_ty,
+                    )
+                    .with_span(span)?;
+                let mut new_place: vir::Expr = self.encode_local(arg)?.into();
+                if let ty::TyKind::Ref(_, _, _) = arg_ty.kind() {
+                    // patch references with an explicit snap app
+                    // TODO: this probably needs to be adjusted when snapshots of
+                    //       references are implemented
+                    new_place = vir::Expr::snap_app(new_place);
+                }
+                body = body.replace_place(&target_place, &new_place);
+            }
+            function.body = Some(body)
+        }
 
         // Add folding/unfolding
         Ok(function)
@@ -329,18 +359,23 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
             .iter()
             .map(|local| self.encode_local((*local).into()).map(|l| l.into()))
             .collect::<Result<_, _>>()?;
-        for item in contract.functional_precondition() {
-            debug!("Encode spec item: {:?}", item);
-            func_spec.push(self.encoder.encode_assertion(
-                item,
+        for (assertion, assertion_substs) in
+            contract.functional_precondition(self.encoder.env(), self.substs)
+        {
+            debug!("Encode spec item: {:?}", assertion);
+            let encoded_assertion = self.encoder.encode_assertion(
+                &assertion,
                 None,
                 &encoded_args,
                 None,
                 true,
-                ErrorCtxt::GenericExpression,
                 self.parent_def_id,
-                self.tymap,
-            )?);
+                assertion_substs,
+            )?;
+            self.encoder
+                .error_manager()
+                .set_error(encoded_assertion.pos(), ErrorCtxt::PureFunctionDefinition);
+            func_spec.push(encoded_assertion);
         }
 
         Ok((
@@ -366,27 +401,30 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
         let encoded_return = self.encode_local(contract.returned_value.into())?;
         debug!("encoded_return: {:?}", encoded_return);
 
-        for item in contract.functional_postcondition() {
+        for (assertion, assertion_substs) in
+            contract.functional_postcondition(self.encoder.env(), self.substs)
+        {
             let encoded_postcond = self.encoder.encode_assertion(
-                item,
+                &assertion,
                 None,
                 &encoded_args,
                 Some(&encoded_return.clone().into()),
                 true,
-                ErrorCtxt::GenericExpression,
                 self.parent_def_id,
-                self.tymap,
+                assertion_substs,
             )?;
-            debug_assert!(!encoded_postcond.pos().is_default());
+            self.encoder
+                .error_manager()
+                .set_error(encoded_postcond.pos(), ErrorCtxt::PureFunctionDefinition);
             func_spec.push(encoded_postcond);
         }
 
         let post = func_spec.into_iter().conjoin();
 
         // TODO: use a better span
-        let postcondition_pos = self.encoder.error_manager().register(
+        let postcondition_pos = self.encoder.error_manager().register_error(
             self.mir.span,
-            ErrorCtxt::GenericExpression,
+            ErrorCtxt::PureFunctionDefinition,
             self.parent_def_id,
         );
 
@@ -406,10 +444,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
         let var_span = mir_encoder.get_local_span(local);
         let var_type = self
             .encoder
-            .encode_snapshot_type(
-                self.interpreter.mir_encoder().get_local_ty(local),
-                self.tymap,
-            )
+            .encode_snapshot_type(self.interpreter.mir_encoder().get_local_ty(local))
             .with_span(var_span)?;
         Ok(vir::LocalVar::new(var_name, var_type))
     }
@@ -423,9 +458,7 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
     }
 
     pub fn encode_function_return_type(&self) -> SpannedEncodingResult<vir::Type> {
-        let ty = self
-            .encoder
-            .resolve_typaram(self.mir.return_ty(), self.tymap);
+        let ty = self.mir.return_ty();
         let return_span = self.get_local_span(mir::RETURN_PLACE);
 
         // Return an error for unsupported return types
@@ -439,25 +472,16 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
 
         let return_local = mir::Place::return_place().as_local().unwrap();
         let span = self.interpreter.mir_encoder().get_local_span(return_local);
-        self.encoder
-            .encode_snapshot_type(ty, self.tymap)
-            .with_span(span)
-    }
-
-    fn encode_substs(&self) -> SpannedEncodingResult<FxHashMap<vir::TypeVar, vir::Type>> {
-        self.encoder
-            .type_substitution_polymorphic_type_map(self.tymap)
-            .with_span(self.mir.span)
+        self.encoder.encode_snapshot_type(ty).with_span(span)
     }
 
     fn encode_type_arguments(&self) -> SpannedEncodingResult<Vec<vir::Type>> {
         self.encoder
-            .encode_generic_arguments(self.proc_def_id, self.tymap)
+            .encode_generic_arguments(self.proc_def_id, self.substs)
             .with_span(self.mir.span)
     }
 
     fn encode_formal_args(&self) -> SpannedEncodingResult<Vec<vir::LocalVar>> {
-        let substs = self.encode_substs()?;
         let mut formal_args = vec![];
         for local in self.mir.args_iter() {
             let mir_encoder = self.interpreter.mir_encoder();
@@ -473,9 +497,8 @@ impl<'p, 'v: 'p, 'tcx: 'v> PureFunctionEncoder<'p, 'v, 'tcx> {
             }
             let var_type = self
                 .encoder
-                .encode_snapshot_type(mir_type, self.tymap)
+                .encode_snapshot_type(mir_type)
                 .with_span(var_span)?;
-            let var_type = var_type.patch(&substs);
             formal_args.push(vir::LocalVar::new(var_name, var_type))
         }
         Ok(formal_args)
