@@ -6,7 +6,7 @@ use vir::low::ast::{
     position::Position,
     predicate::PredicateDecl,
     statement::{self, Statement},
-    ty::{BitVector, Float, Type},
+    ty::{BitVector, BitVectorSize, Float, Type},
     variable::VariableDecl,
     PermAmount,
 };
@@ -53,7 +53,9 @@ impl<'v> ToViper<'v, viper::Stmt<'v>> for Statement {
             Statement::Exhale(statement) => statement.to_viper(ast),
             Statement::Fold(statement) => statement.to_viper(ast),
             Statement::Unfold(statement) => statement.to_viper(ast),
+            Statement::Conditional(statement) => statement.to_viper(ast),
             Statement::MethodCall(statement) => statement.to_viper(ast),
+            Statement::Assign(statement) => statement.to_viper(ast),
         }
     }
 }
@@ -130,6 +132,21 @@ impl<'v> ToViper<'v, viper::Stmt<'v>> for statement::Unfold {
     }
 }
 
+impl<'v> ToViper<'v, viper::Stmt<'v>> for statement::Conditional {
+    fn to_viper(&self, ast: &AstFactory<'v>) -> viper::Stmt<'v> {
+        assert!(
+            !self.position.is_default(),
+            "Statement with default position: {}",
+            self
+        );
+        ast.if_stmt(
+            self.guard.to_viper(ast),
+            ast.seqn(&self.then_branch.to_viper(ast), &[]),
+            ast.seqn(&self.else_branch.to_viper(ast), &[]),
+        )
+    }
+}
+
 impl<'v> ToViper<'v, viper::Stmt<'v>> for statement::MethodCall {
     fn to_viper(&self, ast: &AstFactory<'v>) -> viper::Stmt<'v> {
         ast.method_call(
@@ -139,6 +156,14 @@ impl<'v> ToViper<'v, viper::Stmt<'v>> for statement::MethodCall {
         )
     }
 }
+
+impl<'v> ToViper<'v, viper::Stmt<'v>> for statement::Assign {
+    fn to_viper(&self, ast: &AstFactory<'v>) -> viper::Stmt<'v> {
+        let target_expression = Expression::local(self.target.clone(), self.position);
+        ast.abstract_assign(target_expression.to_viper(ast), self.value.to_viper(ast))
+    }
+}
+
 impl<'v> ToViper<'v, Vec<viper::Expr<'v>>> for Vec<Expression> {
     fn to_viper(&self, ast: &AstFactory<'v>) -> Vec<viper::Expr<'v>> {
         self.iter()
@@ -158,8 +183,8 @@ impl<'v> ToViper<'v, viper::Expr<'v>> for Expression {
             Expression::PredicateAccessPredicate(expression) => expression.to_viper(ast),
             // Expression::FieldAccessPredicate(expression) => expression.to_viper(ast),
             // Expression::Unfolding(expression) => expression.to_viper(ast),
-            // Expression::UnaryOp(expression) => expression.to_viper(ast),
-            Expression::BinOp(expression) => expression.to_viper(ast),
+            Expression::UnaryOp(expression) => expression.to_viper(ast),
+            Expression::BinaryOp(expression) => expression.to_viper(ast),
             // Expression::ContainerOp(expression) => expression.to_viper(ast),
             // Expression::Seq(expression) => expression.to_viper(ast),
             // Expression::Conditional(expression) => expression.to_viper(ast),
@@ -204,32 +229,32 @@ impl<'v> ToViper<'v, viper::Expr<'v>> for expression::LabelledOld {
 
 impl<'v> ToViper<'v, viper::Expr<'v>> for expression::Constant {
     fn to_viper(&self, ast: &AstFactory<'v>) -> viper::Expr<'v> {
-        match &self.value {
-            expression::ConstantValue::Bool(true) => {
-                ast.true_lit_with_pos(self.position.to_viper(ast))
-            }
-            expression::ConstantValue::Bool(false) => {
-                ast.false_lit_with_pos(self.position.to_viper(ast))
-            }
-            expression::ConstantValue::Int(value) => {
-                ast.int_lit_with_pos(*value, self.position.to_viper(ast))
-            }
-            expression::ConstantValue::BigInt(value) => {
-                ast.int_lit_from_ref_with_pos(value, self.position.to_viper(ast))
-            }
-            expression::ConstantValue::Float(expression::FloatConst::F32(value)) => {
-                ast.backend_f32_lit(*value)
-            }
-            expression::ConstantValue::Float(expression::FloatConst::F64(value)) => {
-                ast.backend_f64_lit(*value)
-            }
-            expression::ConstantValue::BitVector(bv_constant) => match bv_constant {
-                expression::BitVectorConst::BV8(value) => ast.backend_bv8_lit(*value),
-                expression::BitVectorConst::BV16(value) => ast.backend_bv16_lit(*value),
-                expression::BitVectorConst::BV32(value) => ast.backend_bv32_lit(*value),
-                expression::BitVectorConst::BV64(value) => ast.backend_bv64_lit(*value),
-                expression::BitVectorConst::BV128(value) => ast.backend_bv128_lit(*value),
+        match &self.ty {
+            Type::Int => match &self.value {
+                expression::ConstantValue::Bool(_) => {
+                    unreachable!()
+                }
+                expression::ConstantValue::Int(value) => {
+                    ast.int_lit_with_pos(*value, self.position.to_viper(ast))
+                }
+                expression::ConstantValue::BigInt(value) => {
+                    ast.int_lit_from_ref_with_pos(value, self.position.to_viper(ast))
+                }
             },
+            Type::Bool => match &self.value {
+                expression::ConstantValue::Bool(true) => {
+                    ast.true_lit_with_pos(self.position.to_viper(ast))
+                }
+                expression::ConstantValue::Bool(false) => {
+                    ast.false_lit_with_pos(self.position.to_viper(ast))
+                }
+                _ => unreachable!(),
+            },
+            Type::Float(_) => unimplemented!(),
+            Type::BitVector(_) => unimplemented!(),
+            Type::Seq(_) => unimplemented!(),
+            Type::Ref => unimplemented!(),
+            Type::Domain(domain) => unimplemented!("domain: {:?} constant: {:?}", domain, self),
         }
     }
 }
@@ -244,7 +269,20 @@ impl<'v> ToViper<'v, viper::Expr<'v>> for expression::PredicateAccessPredicate {
     }
 }
 
-impl<'v> ToViper<'v, viper::Expr<'v>> for expression::BinOp {
+impl<'v> ToViper<'v, viper::Expr<'v>> for expression::UnaryOp {
+    fn to_viper(&self, ast: &AstFactory<'v>) -> viper::Expr<'v> {
+        match self.op_kind {
+            expression::UnaryOpKind::Minus => {
+                ast.minus_with_pos(self.argument.to_viper(ast), self.position.to_viper(ast))
+            }
+            expression::UnaryOpKind::Not => {
+                ast.not_with_pos(self.argument.to_viper(ast), self.position.to_viper(ast))
+            }
+        }
+    }
+}
+
+impl<'v> ToViper<'v, viper::Expr<'v>> for expression::BinaryOp {
     fn to_viper(&self, ast: &AstFactory<'v>) -> viper::Expr<'v> {
         match self.op_kind {
             expression::BinaryOpKind::EqCmp => ast.eq_cmp_with_pos(
@@ -399,11 +437,17 @@ impl<'v> ToViper<'v, viper::Type<'v>> for Type {
             Type::Float(Float::F32) => ast.backend_f32_type(),
             Type::Float(Float::F64) => ast.backend_f64_type(),
             Type::BitVector(bv_size) => match bv_size {
-                BitVector::BV8 => ast.backend_bv8_type(),
-                BitVector::BV16 => ast.backend_bv16_type(),
-                BitVector::BV32 => ast.backend_bv32_type(),
-                BitVector::BV64 => ast.backend_bv64_type(),
-                BitVector::BV128 => ast.backend_bv128_type(),
+                BitVector::Signed(BitVectorSize::BV8) | BitVector::Unsigned(BitVectorSize::BV8) => {
+                    ast.backend_bv8_type()
+                }
+                BitVector::Signed(BitVectorSize::BV16)
+                | BitVector::Unsigned(BitVectorSize::BV16) => ast.backend_bv16_type(),
+                BitVector::Signed(BitVectorSize::BV32)
+                | BitVector::Unsigned(BitVectorSize::BV32) => ast.backend_bv32_type(),
+                BitVector::Signed(BitVectorSize::BV64)
+                | BitVector::Unsigned(BitVectorSize::BV64) => ast.backend_bv64_type(),
+                BitVector::Signed(BitVectorSize::BV128)
+                | BitVector::Unsigned(BitVectorSize::BV128) => ast.backend_bv128_type(),
             },
         }
     }

@@ -96,30 +96,34 @@ impl SpecificationIdGenerator {
     }
 }
 
-pub(crate) struct NameGenerator {}
+pub(crate) fn generate_struct_name(item: &syn::ItemImpl) -> String {
+    let uuid = Uuid::new_v4().to_simple();
+    let name_ty = generate_name_for_type(&*item.self_ty).unwrap_or_default();
+    format!("PrustiStruct{}_{}", name_ty, uuid)
+}
 
-impl NameGenerator {
-    pub(crate) fn new() -> Self { Self { } }
-    pub(crate) fn generate_struct_name(&self, item: &syn::ItemImpl) -> Result<String, String> {
-        let mut path_str: String = String::new();
+pub(crate) fn generate_struct_name_for_trait(item: &syn::ItemTrait) -> String {
+    let uuid = Uuid::new_v4().to_simple();
+    format!("PrustiTrait{}_{}", item.ident, uuid)
+}
 
-        match &*item.self_ty {
-            syn::Type::Path (ty_path) => {
-                for seg in ty_path.path.segments.iter() {
-                    path_str.push_str(&seg.ident.to_string());
-                }
-            }
-            _ => {
-                return Err("expected a path".to_string());
-            }
-        };
-        let uuid = Uuid::new_v4().to_simple();
+pub(crate) fn generate_mod_name(ident: &syn::Ident) -> String {
+    let uuid = Uuid::new_v4().to_simple();
+    format!("{}_{}", ident, uuid)
+}
 
-        Ok(format!("PrustiStruct{}_{}", path_str, uuid))
-    }
-
-    pub(crate) fn generate_mod_name(&self, ident: &syn::Ident) -> String {
-        let uuid = Uuid::new_v4().to_simple();
-        format!("{}_{}", ident, uuid)
+fn generate_name_for_type(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(ty_path) => {
+            Some(String::from_iter(ty_path.path.segments.iter()
+                .map(|seg| seg.ident.to_string())))
+        },
+        syn::Type::Slice(ty_slice) => {
+            let ty = &*ty_slice.elem;
+            Some(format!("Slice{}", generate_name_for_type(ty)?.as_str()))
+        },
+        _ => {
+            None
+        }
     }
 }

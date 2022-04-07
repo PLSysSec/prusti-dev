@@ -1,4 +1,4 @@
-// compile-flags: -Ponly_lifetimes_core=true
+// compile-flags: -Punsafe_core_proof=true
 
 use prusti_contracts::*;
 
@@ -12,8 +12,14 @@ struct T2 {
 }
 
 fn construct() {
+    let c = true;
     let a = T { val: 4 };
     let _b = T2 { f1: T { val: 5 }, f2: a };
+}
+
+fn copy() {
+    let a = true;
+    let b = !a;
 }
 
 fn main() {}

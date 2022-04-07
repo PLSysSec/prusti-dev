@@ -13,10 +13,10 @@ use rustc_hir::hir_id::HirId;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::ty::subst::SubstsRef;
-use rustc_trait_selection::infer::{TyCtxtInferExt, InferCtxtExt};
+use rustc_trait_selection::infer::{InferCtxtExt, TyCtxtInferExt};
 use std::path::PathBuf;
 
-use rustc_span::{Span, MultiSpan, symbol::Symbol};
+use rustc_span::{MultiSpan, Span, symbol::Symbol};
 use std::collections::HashSet;
 use log::{debug, trace};
 use std::rc::Rc;
@@ -36,6 +36,7 @@ pub mod place_set;
 pub mod polonius_info;
 mod procedure;
 pub mod mir_dump;
+mod traits;
 
 use self::collect_prusti_spec_visitor::CollectPrustiSpecVisitor;
 use self::collect_closure_defs_visitor::CollectClosureDefsVisitor;
@@ -51,13 +52,20 @@ use crate::data::ProcedureDefId;
 // use utils::get_attr_value;
 use rustc_span::source_map::SourceMap;
 
+struct CachedBody<'tcx> {
+    /// MIR body as known to the compiler.
+    base_body: Rc<mir::Body<'tcx>>,
+    /// Copies of the MIR body with the given substs applied.
+    monomorphised_bodies: HashMap<SubstsRef<'tcx>, Rc<mir::Body<'tcx>>>,
+    /// Cached borrowck information.
+    borrowck_facts: Rc<BorrowckFacts>,
+}
+
 /// Facade to the Rust compiler.
 // #[derive(Copy, Clone)]
 pub struct Environment<'tcx> {
     /// Cached MIR bodies.
-    bodies: RefCell<HashMap<LocalDefId, Rc<mir::Body<'tcx>>>>,
-    /// Cached borrowck information.
-    borrowck_facts: RefCell<HashMap<LocalDefId, Rc<BorrowckFacts>>>,
+    bodies: RefCell<HashMap<LocalDefId, CachedBody<'tcx>>>,
     tcx: TyCtxt<'tcx>,
 }
 
@@ -67,7 +75,6 @@ impl<'tcx> Environment<'tcx> {
         Environment {
             tcx,
             bodies: RefCell::new(HashMap::new()),
-            borrowck_facts: RefCell::new(HashMap::new()),
         }
     }
 
@@ -242,31 +249,42 @@ impl<'tcx> Environment<'tcx> {
         Procedure::new(self, proc_def_id)
     }
 
-    /// Get the MIR body of a local procedure.
-    pub fn local_mir(&self, def_id: LocalDefId) -> Rc<mir::Body<'tcx>> {
+    /// Get the MIR body of a local procedure, monomorphised with the given
+    /// type substitutions.
+    pub fn local_mir(
+        &self,
+        def_id: LocalDefId,
+        substs: SubstsRef<'tcx>,
+    ) -> Rc<mir::Body<'tcx>> {
         let mut bodies = self.bodies.borrow_mut();
-        if let Some(body) = bodies.get(&def_id) {
-            body.clone()
-        } else {
-            // SAFETY: This is safe because we are feeding in the same `tcx`
-            // that was used to store the data.
-            let body_with_facts = unsafe {
-                self::mir_storage::retrieve_mir_body(self.tcx, def_id)
-            };
-            let body = body_with_facts.body;
-            let facts = BorrowckFacts {
-                input_facts: RefCell::new(Some(body_with_facts.input_facts)),
-                output_facts: body_with_facts.output_facts,
-                location_table: RefCell::new(Some(body_with_facts.location_table)),
-            };
+        let body = bodies.entry(def_id)
+            .or_insert_with(|| {
+                // SAFETY: This is safe because we are feeding in the same `tcx`
+                // that was used to store the data.
+                let body_with_facts = unsafe {
+                    self::mir_storage::retrieve_mir_body(self.tcx, def_id)
+                };
+                let body = body_with_facts.body;
+                let facts = BorrowckFacts {
+                    input_facts: RefCell::new(Some(body_with_facts.input_facts)),
+                    output_facts: body_with_facts.output_facts,
+                    location_table: RefCell::new(Some(body_with_facts.location_table)),
+                };
 
-            let mut borrowck_facts = self.borrowck_facts.borrow_mut();
-            borrowck_facts.insert(def_id, Rc::new(facts));
-
-            bodies.entry(def_id).or_insert_with(|| {
-                Rc::new(body)
-            }).clone()
-        }
+                CachedBody {
+                    base_body: Rc::new(body),
+                    monomorphised_bodies: HashMap::new(),
+                    borrowck_facts: Rc::new(facts),
+                }
+            });
+        body
+            .monomorphised_bodies
+            .entry(substs)
+            .or_insert_with(|| {
+                use crate::rustc_middle::ty::subst::Subst;
+                body.base_body.clone().subst(self.tcx, substs)
+            })
+            .clone()
     }
 
     /// Get Polonius facts of a local procedure.
@@ -276,8 +294,9 @@ impl<'tcx> Environment<'tcx> {
 
     pub fn try_get_local_mir_borrowck_facts(&self, def_id: LocalDefId) -> Option<Rc<BorrowckFacts>> {
         trace!("try_get_local_mir_borrowck_facts: {:?}", def_id);
-        let borrowck_facts = self.borrowck_facts.borrow();
-        borrowck_facts.get(&def_id).cloned()
+        self.bodies.borrow()
+            .get(&def_id)
+            .map(|body| body.borrowck_facts.clone())
     }
 
     /// Get the MIR body of an external procedure.
@@ -290,7 +309,7 @@ impl<'tcx> Environment<'tcx> {
         let mut res = HashSet::new();
         let traits = self.tcx().all_traits();
         for trait_id in traits {
-            self.tcx().for_each_relevant_impl(trait_id, ty, |impl_id| {
+            self.tcx().for_each_relevant_impl(trait_id, *ty, |impl_id| {
                 if let Some(relevant_trait_id) = self.tcx().trait_id_of_impl(impl_id) {
                     res.insert(relevant_trait_id);
                 }
@@ -306,25 +325,102 @@ impl<'tcx> Environment<'tcx> {
         self.tcx().associated_items(id).filter_by_name_unhygienic(name).next().cloned()
     }
 
+    /// Returns true iff `def_id` is a trait method
+    pub fn is_trait_method(&self, def_id: ProcedureDefId) -> bool {
+        self.tcx.trait_of_item(def_id).is_some()
+    }
+
+    /// Returns true iff `def_id` is an implementation of a trait method
+    pub fn is_trait_method_impl(&self, def_id: ProcedureDefId) -> bool {
+        self.tcx.impl_of_method(def_id)
+            .and_then(|impl_id| self.tcx.trait_id_of_impl(impl_id))
+            .is_some()
+    }
+
+    /// Returns the `DefId` of the corresponding trait method, if any.
+    /// This should not be used to resolve calls (where substs are known): use
+    /// `find_trait_method_substs` instead!
+    pub fn find_trait_method(
+        &self,
+        impl_def_id: ProcedureDefId, // what are we calling?
+    ) -> Option<DefId> {
+        self.tcx
+            .impl_of_method(impl_def_id)
+            .and_then(|impl_id| self.tcx.trait_id_of_impl(impl_id))
+            .and_then(|trait_id| self.get_assoc_item(trait_id, self.tcx().item_name(impl_def_id)))
+            .map(|assoc_item| assoc_item.def_id)
+    }
+
+    /// If the given `impl_method_def_id` is an implementation of a trait
+    /// method, return the `DefId` of that trait method as well as an adapted
+    /// version of the callsite `impl_method_substs` substitutions.
+    pub fn find_trait_method_substs(
+        &self,
+        impl_method_def_id: ProcedureDefId, // what are we calling?
+        impl_method_substs: SubstsRef<'tcx>, // what are the substs on the call?
+    ) -> Option<(ProcedureDefId, SubstsRef<'tcx>)> {
+        let impl_def_id = self.tcx.impl_of_method(impl_method_def_id)?;
+        let trait_ref = self.tcx.impl_trait_ref(impl_def_id)?;
+
+        // At this point, we know that the given method:
+        // - belongs to an impl block and
+        // - the impl block implements a trait.
+        // For the `get_assoc_item` call, we therefore `unwrap`, as not finding
+        // the associated item would be a (compiler) internal error.
+        let trait_def_id = trait_ref.def_id;
+        let trait_method_def_id = self.get_assoc_item(
+            trait_def_id,
+            self.tcx().item_name(impl_method_def_id),
+        ).unwrap().def_id;
+
+        // sanity check: have we been given the correct number of substs?
+        let identity_impl_method = self.identity_substs(impl_method_def_id);
+        assert_eq!(identity_impl_method.len(), impl_method_substs.len());
+
+        // Given:
+        // ```
+        // trait Trait<Tp> {
+        //     fn f<Tx, Ty, Tz>();
+        // }
+        // struct Struct<Ex, Ey> { ... }
+        // impl<A, B, C> Trait<A> for Struct<B, C> {
+        //     fn f<X, Y, Z>() { ... }
+        // }
+        // ```
+        //
+        // The various substs look like this:
+        // - identity for Trait:           `[Self, Tp]`
+        // - identity for Trait::f:        `[Self, Tp, Tx, Ty, Tz]`
+        // - substs of the impl trait ref: `[Struct<B, C>, A]`
+        // - identity for the impl:        `[A, B, C]`
+        // - identity for Struct::f:       `[A, B, C, X, Y, Z]`
+        //
+        // What we need is a substs suitable for a call to Trait::f, whic is in
+        // this case `[Struct<B, C>, A, X, Y, Z]`. More generally, it is the
+        // concatenation of the trait ref substs with the identity of the impl
+        // method after skipping the identity of the impl.
+        let impl_substs = self.identity_substs(impl_def_id);
+        let trait_method_substs = self.tcx.mk_substs(trait_ref.substs.iter()
+            .chain(impl_method_substs.iter().skip(impl_substs.len())));
+
+        // sanity check: do we now have the correct number of substs?
+        let identity_trait_method = self.identity_substs(trait_method_def_id);
+        assert_eq!(trait_method_substs.len(), identity_trait_method.len());
+
+        Some((trait_method_def_id, trait_method_substs))
+    }
+
     /// Given some procedure `proc_def_id` which is called, this method returns the actual method which will be executed when `proc_def_id` is defined on a trait.
-    /// Returns `None` if this method can not be found or the provided `proc_def_it` is no trait item.
+    /// Returns `None` if this method can not be found or the provided `proc_def_id` is no trait item.
     pub fn find_impl_of_trait_method_call(&self, proc_def_id: ProcedureDefId, substs: SubstsRef<'tcx>) -> Option<ProcedureDefId> {
+        // TODO(tymap): remove this method?
         if let Some(trait_id) = self.tcx().trait_of_item(proc_def_id) {
             debug!("Fetching implementations of method '{:?}' defined in trait '{}' with substs '{:?}'", proc_def_id, self.tcx().def_path_str(trait_id), substs);
 
-            /*
-                Note: In order to run ty::Instance::resolve, we disable diagnostics. In some cases
-                if method lookup fails, this method attaches delayed span bugs to the compiler session,
-                which will eventually be printed to stderr. With disabled diagnostics, these errors are ignored.
-                There is a change request pending for the Rust compiler to change that behaviour [1] which is not yet implemented.
-                [1]  https://github.com/rust-lang/compiler-team/issues/449
-             */
-            let diagnostic: &rustc_errors::Handler = self.tcx().sess.diagnostic();
-            let resolved_instance: Result<Option<ty::Instance<'tcx>>, rustc_errors::ErrorReported> = diagnostic.with_disabled_diagnostic(||  {
-                let param_env = ty::ParamEnv::reveal_all();
-                ty::Instance::resolve(self.tcx(), param_env, proc_def_id, substs)
-            });
-
+            // TODO(tymap): don't use reveal_all
+            let param_env = ty::ParamEnv::reveal_all();
+            let key = ty::ParamEnvAnd { param_env, value: (proc_def_id, substs) };
+            let resolved_instance = traits::resolve_instance(self.tcx(), key);
             return match resolved_instance {
                 Ok(method_impl_instance) => {
                     let impl_method_def_id = method_impl_instance.map(|instance| instance.def_id());
@@ -336,8 +432,38 @@ impl<'tcx> Environment<'tcx> {
                     None
                 }
             };
+        } else {
+            None
         }
-        None
+    }
+
+    /// Given a call to `called_def_id` from within `caller_def_id`, returns
+    /// the `DefId` that will actually be called if known (i.e. if a trait
+    /// method call actually resolves to a concrete implementation), as well as
+    /// the correct substitutions for that call. If a method is not resolved,
+    /// returns the original `called_def_id` and `call_substs`.
+    pub fn resolve_method_call(
+        &self,
+        caller_def_id: ProcedureDefId, // where are we calling from?
+        called_def_id: ProcedureDefId, // what are we calling?
+        call_substs: SubstsRef<'tcx>,
+    ) -> (ProcedureDefId, SubstsRef<'tcx>) {
+        use crate::rustc_middle::ty::TypeFoldable;
+
+        // avoids a compiler-internal panic
+        if call_substs.needs_infer() {
+            return (called_def_id, call_substs);
+        }
+
+        let param_env = self.tcx.param_env(caller_def_id);
+        let instance = self.tcx
+            .resolve_instance(param_env.and((called_def_id, call_substs)))
+            .unwrap();
+        if let Some(instance) = instance {
+            (instance.def_id(), instance.substs)
+        } else {
+            (called_def_id, call_substs)
+        }
     }
 
     pub fn type_is_allowed_in_pure_functions(&self, ty: ty::Ty<'tcx>, param_env: ty::ParamEnv<'tcx>) -> bool {
@@ -375,5 +501,11 @@ impl<'tcx> Environment<'tcx> {
                 .type_implements_trait(trait_def_id, ty, ty::List::empty(), param_env)
                 .must_apply_considering_regions()
         )
+    }
+
+    /// Return the default substitutions for a particular item, i.e. where each
+    /// generic maps to itself.
+    pub fn identity_substs(&self, def_id: ProcedureDefId) -> SubstsRef<'tcx> {
+        ty::List::identity_for_item(self.tcx, def_id)
     }
 }

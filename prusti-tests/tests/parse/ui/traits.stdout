@@ -46,7 +46,7 @@ trait Test1 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test2_$(NUM_UUID)(result: ())
-     -> bool {
+        -> bool {
         !!((true): bool)
     }
     #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
@@ -63,7 +63,7 @@ trait Test1 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test4_$(NUM_UUID)(result: ())
-     -> bool {
+        -> bool {
         !!((true): bool)
     }
     #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
@@ -80,7 +80,7 @@ trait Test2 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test1_$(NUM_UUID)(result: ())
-     -> bool {
+        -> bool {
         !!((true): bool)
     }
     #[prusti::pre_spec_id_ref = "$(NUM_UUID)"]
@@ -96,7 +96,7 @@ trait Test2 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test2_$(NUM_UUID)(result: ())
-     -> bool {
+        -> bool {
         !!((true): bool)
     }
     #[prusti::pre_spec_id_ref = "$(NUM_UUID)"]
@@ -116,8 +116,7 @@ trait Test3 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test2_$(NUM_UUID)(&self,
-                                                               result: ())
-     -> bool {
+        result: ()) -> bool {
         !!((true): bool)
     }
     #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
@@ -134,8 +133,7 @@ trait Test3 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test4_$(NUM_UUID)(&self,
-                                                               result: ())
-     -> bool {
+        result: ()) -> bool {
         !!((true): bool)
     }
     #[prusti::post_spec_id_ref = "$(NUM_UUID)"]
@@ -152,8 +150,7 @@ trait Test4 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test1_$(NUM_UUID)(&self,
-                                                               result: ())
-     -> bool {
+        result: ()) -> bool {
         !!((true): bool)
     }
     #[prusti::pre_spec_id_ref = "$(NUM_UUID)"]
@@ -169,8 +166,7 @@ trait Test4 {
     #[prusti::spec_only]
     #[prusti::spec_id = "$(NUM_UUID)"]
     fn prusti_post_item_test2_$(NUM_UUID)(&self,
-                                                               result: ())
-     -> bool {
+        result: ()) -> bool {
         !!((true): bool)
     }
     #[prusti::pre_spec_id_ref = "$(NUM_UUID)"]
@@ -178,15 +174,15 @@ trait Test4 {
     fn test2(&self);
 }
 fn main() {}
-Procedure(ProcedureSpecification { pres: [DefId(0:9 ~ traits[$(CRATE_ID)]::Test1::prusti_pre_item_test1_$(NUM_UUID))], posts: [], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:13 ~ traits[$(CRATE_ID)]::Test1::prusti_pre_item_test3_$(NUM_UUID))], posts: [], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:23 ~ traits[$(CRATE_ID)]::Test3::prusti_pre_item_test1_$(NUM_UUID))], posts: [], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:27 ~ traits[$(CRATE_ID)]::Test3::prusti_pre_item_test3_$(NUM_UUID))], posts: [], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:11 ~ traits[$(CRATE_ID)]::Test1::prusti_post_item_test2_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:15 ~ traits[$(CRATE_ID)]::Test1::prusti_post_item_test4_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:25 ~ traits[$(CRATE_ID)]::Test3::prusti_post_item_test2_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [], posts: [DefId(0:29 ~ traits[$(CRATE_ID)]::Test3::prusti_post_item_test4_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:17 ~ traits[$(CRATE_ID)]::Test2::prusti_pre_item_test1_$(NUM_UUID))], posts: [DefId(0:18 ~ traits[$(CRATE_ID)]::Test2::prusti_post_item_test1_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:20 ~ traits[$(CRATE_ID)]::Test2::prusti_pre_item_test2_$(NUM_UUID))], posts: [DefId(0:21 ~ traits[$(CRATE_ID)]::Test2::prusti_post_item_test2_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:31 ~ traits[$(CRATE_ID)]::Test4::prusti_pre_item_test1_$(NUM_UUID))], posts: [DefId(0:32 ~ traits[$(CRATE_ID)]::Test4::prusti_post_item_test1_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
-Procedure(ProcedureSpecification { pres: [DefId(0:34 ~ traits[$(CRATE_ID)]::Test4::prusti_pre_item_test2_$(NUM_UUID))], posts: [DefId(0:35 ~ traits[$(CRATE_ID)]::Test4::prusti_post_item_test2_$(NUM_UUID))], pledges: [], predicate_body: None, pure: false, trusted: false })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:9 ~ traits[$(CRATE_ID)]::Test1::prusti_pre_item_test1_$(NUM_UUID))]), posts: Empty, pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:13 ~ traits[$(CRATE_ID)]::Test1::prusti_pre_item_test3_$(NUM_UUID))]), posts: Empty, pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:23 ~ traits[$(CRATE_ID)]::Test3::prusti_pre_item_test1_$(NUM_UUID))]), posts: Empty, pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:27 ~ traits[$(CRATE_ID)]::Test3::prusti_pre_item_test3_$(NUM_UUID))]), posts: Empty, pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:11 ~ traits[$(CRATE_ID)]::Test1::prusti_post_item_test2_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:15 ~ traits[$(CRATE_ID)]::Test1::prusti_post_item_test4_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:25 ~ traits[$(CRATE_ID)]::Test3::prusti_post_item_test2_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Inherent([DefId(0:29 ~ traits[$(CRATE_ID)]::Test3::prusti_post_item_test4_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:17 ~ traits[$(CRATE_ID)]::Test2::prusti_pre_item_test1_$(NUM_UUID))]), posts: Inherent([DefId(0:18 ~ traits[$(CRATE_ID)]::Test2::prusti_post_item_test1_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:20 ~ traits[$(CRATE_ID)]::Test2::prusti_pre_item_test2_$(NUM_UUID))]), posts: Inherent([DefId(0:21 ~ traits[$(CRATE_ID)]::Test2::prusti_post_item_test2_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:31 ~ traits[$(CRATE_ID)]::Test4::prusti_pre_item_test1_$(NUM_UUID))]), posts: Inherent([DefId(0:32 ~ traits[$(CRATE_ID)]::Test4::prusti_post_item_test1_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Inherent([DefId(0:34 ~ traits[$(CRATE_ID)]::Test4::prusti_pre_item_test2_$(NUM_UUID))]), posts: Inherent([DefId(0:35 ~ traits[$(CRATE_ID)]::Test4::prusti_post_item_test2_$(NUM_UUID))]), pledges: Empty, trusted: Inherent(false) })

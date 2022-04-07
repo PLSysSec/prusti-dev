@@ -3,11 +3,12 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#![allow(deprecated)]
 
 pub mod commandline;
 
 use self::commandline::CommandLine;
-use config_crate::{Config, Environment, File, FileFormat};
+use config_crate::{Config, Environment, File};
 use serde::Deserialize;
 use std::{collections::HashSet, env, path::PathBuf, sync::RwLock};
 
@@ -19,6 +20,7 @@ pub struct Optimizations {
     pub remove_empty_if: bool,
     pub purify_vars: bool,
     pub fix_quantifiers: bool,
+    pub fix_unfoldings: bool,
     pub remove_unused_vars: bool,
     pub remove_trivial_assertions: bool,
     pub clean_cfg: bool,
@@ -33,6 +35,7 @@ impl Optimizations {
             remove_empty_if: false,
             purify_vars: false,
             fix_quantifiers: false,
+            fix_unfoldings: false,
             remove_unused_vars: false,
             remove_trivial_assertions: false,
             clean_cfg: false,
@@ -47,6 +50,8 @@ impl Optimizations {
             remove_empty_if: true,
             purify_vars: true,
             fix_quantifiers: true,
+            // Disabled because https://github.com/viperproject/prusti-dev/issues/892 has been fixed
+            fix_unfoldings: false,
             remove_unused_vars: true,
             remove_trivial_assertions: true,
             clean_cfg: true,
@@ -66,6 +71,7 @@ lazy_static! {
         settings.set_default("check_overflows", true).unwrap();
         settings.set_default("check_panics", true).unwrap();
         settings.set_default("encode_unsigned_num_constraint", false).unwrap();
+        settings.set_default("encode_bitvectors", false).unwrap();
         settings.set_default("simplify_encoding", true).unwrap();
         settings.set_default("log_dir", "log").unwrap();
         settings.set_default("cache_path", "").unwrap();
@@ -85,6 +91,7 @@ lazy_static! {
         settings.set_default("assert_timeout", 10_000).unwrap();
         settings.set_default("use_more_complete_exhale", true).unwrap();
         settings.set_default("skip_unsupported_features", false).unwrap();
+        settings.set_default("internal_errors_as_warnings", false).unwrap();
         settings.set_default("allow_unreachable_unsupported_code", false).unwrap();
         settings.set_default("no_verify", false).unwrap();
         settings.set_default("no_verify_deps", false).unwrap();
@@ -95,7 +102,8 @@ lazy_static! {
         settings.set_default("enable_purification_optimization", false).unwrap();
         settings.set_default("enable_manual_axiomatization", false).unwrap();
         settings.set_default::<Option<i64>>("verification_deadline", None).unwrap();
-        settings.set_default("only_lifetimes_core", false).unwrap();
+        settings.set_default("unsafe_core_proof", false).unwrap();
+        settings.set_default("only_memory_safety", false).unwrap();
 
         settings.set_default("print_desugared_specs", false).unwrap();
         settings.set_default("print_typeckd_specs", false).unwrap();
@@ -120,20 +128,21 @@ lazy_static! {
         allowed_keys.insert("config".to_string());
         allowed_keys.insert("log".to_string());
         allowed_keys.insert("log_style".to_string());
+        allowed_keys.insert("rustc_log_args".to_string());
+        allowed_keys.insert("rustc_log_env".to_string());
 
-        // 2. Override with the optional TOML file "Prusti.toml" (if there is any)
+        // 2. Override with default env variables (e.g. `DEFAULT_PRUSTI_CACHE_PATH`, ...)
         settings.merge(
-            File::new("Prusti.toml", FileFormat::Toml).required(false)
+            Environment::with_prefix("DEFAULT_PRUSTI").ignore_empty(true)
         ).unwrap();
-        check_keys(&settings, &allowed_keys, "Prusti.toml file");
+        check_keys(&settings, &allowed_keys, "default environment variables");
 
         // 3. Override with an optional TOML file specified by the `PRUSTI_CONFIG` env variable
-        if let Ok(file) = env::var("PRUSTI_CONFIG") {
-            // Since this file is explicitly specified by the user, it would be
-            // nice to tell them if we cannot open it.
-            settings.merge(File::with_name(&file)).unwrap();
-            check_keys(&settings, &allowed_keys, &format!("{} file", file));
-        }
+        let file = env::var("PRUSTI_CONFIG").unwrap_or_else(|_| "./Prusti.toml".to_string());
+        // Since this file may explicitly be specified by the user, it would be
+        // nice to tell them if we cannot open it.
+        settings.merge(File::with_name(&file).required(false)).unwrap();
+        check_keys(&settings, &allowed_keys, &format!("{} file", file));
 
         // 4. Override with env variables (`PRUSTI_VIPER_BACKEND`, ...)
         settings.merge(
@@ -293,6 +302,11 @@ pub fn encode_unsigned_num_constraint() -> bool {
     read_setting("encode_unsigned_num_constraint")
 }
 
+/// Enable (highly hacky) support for bitvectors.
+pub fn encode_bitvectors() -> bool {
+    read_setting("encode_bitvectors")
+}
+
 /// Location of 'libprusti_contracts*.rlib'
 pub fn contracts_lib() -> String {
     read_setting("contracts_lib")
@@ -437,6 +451,7 @@ pub fn optimizations() -> Optimizations {
             "remove_empty_if" => opt.remove_empty_if = true,
             "purify_vars" => opt.purify_vars = true,
             "fix_quantifiers" => opt.fix_quantifiers = true,
+            "fix_unfoldings" => opt.fix_unfoldings = true,
             "remove_unused_vars" => opt.remove_unused_vars = true,
             "remove_trivial_assertions" => opt.remove_trivial_assertions = true,
             "clean_cfg" => opt.clean_cfg = true,
@@ -470,11 +485,18 @@ pub fn verification_deadline() -> Option<u64> {
     })
 }
 
-/// Do only the core proof of the lifetimes.
+/// Use the new core proof suitable for unsafe code.
 ///
 /// **Note:** this is currently very incomplete.
-pub fn only_lifetimes_core() -> bool {
-    read_setting("only_lifetimes_core")
+pub fn unsafe_core_proof() -> bool {
+    read_setting("unsafe_core_proof")
+}
+
+/// Verify only the core proof.
+///
+/// Note: This should be used together with `unsafe_core_proof=True`.
+pub fn only_memory_safety() -> bool {
+    read_setting("only_memory_safety")
 }
 
 /// Replace the given basic blocks with ``assume false``.
@@ -485,6 +507,11 @@ pub fn delete_basic_blocks() -> Vec<String> {
 /// Skip features that are unsupported or partially supported
 pub fn skip_unsupported_features() -> bool {
     read_setting("skip_unsupported_features")
+}
+
+/// Report internal errors as warnings instead of errors. Used for testing.
+pub fn internal_errors_as_warnings() -> bool {
+    read_setting("internal_errors_as_warnings")
 }
 
 /// Encode unsupported code as `assert false`, so that we report error messages

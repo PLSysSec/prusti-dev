@@ -212,6 +212,9 @@ fn main() {
                 method!("add"),
                 method!("sub"),
                 method!("mul"),
+                method!("udiv"),
+                method!("urem"),
+                method!("srem"),
                 method!("shl"),
                 method!("lshr"),
                 method!("ashr"),
@@ -683,7 +686,11 @@ fn main() {
                 method!("fullId"),
                 method!("reason"),
                 method!("readableMessage", "()Ljava/lang/String;"),
-                method!("counterexample")
+                method!("failureContexts")
+            ]),
+            java_class!("viper.silver.verifier.FailureContext", vec![
+                method!("counterExample"),
+                method!("toString")
             ]),
             java_class!("viper.silver.verifier.Counterexample", vec![
                 method!("model"),

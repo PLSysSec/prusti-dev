@@ -245,7 +245,18 @@ pub trait ExprFolder: Sized {
         } = expr;
         Expr::ForAll(ForAll {
             variables,
-            triggers,
+            triggers: triggers
+                .iter()
+                .map(|set| {
+                    Trigger::new(
+                        set.elements()
+                            .iter()
+                            .cloned()
+                            .map(|expr| self.fold(expr))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
             body: self.fold_boxed(body),
             position,
         })
@@ -260,7 +271,18 @@ pub trait ExprFolder: Sized {
         } = expr;
         Expr::Exists(Exists {
             variables,
-            triggers,
+            triggers: triggers
+                .iter()
+                .map(|set| {
+                    Trigger::new(
+                        set.elements()
+                            .iter()
+                            .cloned()
+                            .map(|expr| self.fold(expr))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
             body: self.fold_boxed(body),
             position,
         })
@@ -393,6 +415,14 @@ pub trait ExprFolder: Sized {
             position,
         })
     }
+
+    fn fold_cast(&mut self, expr: Cast) -> Expr {
+        Expr::Cast(Cast {
+            kind: expr.kind,
+            base: self.fold_boxed(expr.base),
+            position: expr.position,
+        })
+    }
 }
 
 pub fn default_fold_expr<T: ExprFolder>(this: &mut T, e: Expr) -> Expr {
@@ -425,6 +455,7 @@ pub fn default_fold_expr<T: ExprFolder>(this: &mut T, e: Expr) -> Expr {
         Expr::SnapApp(snap_app) => this.fold_snap_app(snap_app),
         Expr::ContainerOp(container_op) => this.fold_container_op(container_op),
         Expr::Seq(seq) => this.fold_seq(seq),
+        Expr::Cast(cast) => this.fold_cast(cast),
     }
 }
 
@@ -512,8 +543,16 @@ pub trait ExprWalker: Sized {
     }
     fn walk_forall(&mut self, statement: &ForAll) {
         let ForAll {
-            variables, body, ..
+            variables,
+            triggers,
+            body,
+            ..
         } = statement;
+        for set in triggers {
+            for expr in set.elements() {
+                self.walk(expr);
+            }
+        }
         for var in variables {
             self.walk_local_var(var);
         }
@@ -521,8 +560,16 @@ pub trait ExprWalker: Sized {
     }
     fn walk_exists(&mut self, statement: &Exists) {
         let Exists {
-            variables, body, ..
+            variables,
+            triggers,
+            body,
+            ..
         } = statement;
+        for set in triggers {
+            for expr in set.elements() {
+                self.walk(expr);
+            }
+        }
         for var in variables {
             self.walk_local_var(var);
         }
@@ -620,6 +667,11 @@ pub trait ExprWalker: Sized {
         }
         self.walk_type(typ);
     }
+
+    fn walk_cast(&mut self, statement: &Cast) {
+        let Cast { base, .. } = statement;
+        self.walk(base);
+    }
 }
 
 pub fn default_walk_expr<T: ExprWalker>(this: &mut T, e: &Expr) {
@@ -652,6 +704,7 @@ pub fn default_walk_expr<T: ExprWalker>(this: &mut T, e: &Expr) {
         Expr::SnapApp(snap_app) => this.walk_snap_app(snap_app),
         Expr::ContainerOp(container_op) => this.walk_container_op(container_op),
         Expr::Seq(seq) => this.walk_seq(seq),
+        Expr::Cast(cast) => this.walk_cast(cast),
     }
 }
 
@@ -849,7 +902,18 @@ pub trait FallibleExprFolder: Sized {
         } = expr;
         Ok(Expr::ForAll(ForAll {
             variables,
-            triggers,
+            triggers: triggers
+                .iter()
+                .map(|set| {
+                    Ok(Trigger::new(
+                        set.elements()
+                            .iter()
+                            .cloned()
+                            .map(|expr| self.fallible_fold(expr))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             body: self.fallible_fold_boxed(body)?,
             position,
         }))
@@ -864,7 +928,18 @@ pub trait FallibleExprFolder: Sized {
         } = expr;
         Ok(Expr::Exists(Exists {
             variables,
-            triggers,
+            triggers: triggers
+                .iter()
+                .map(|set| {
+                    Ok(Trigger::new(
+                        set.elements()
+                            .iter()
+                            .cloned()
+                            .map(|expr| self.fallible_fold(expr))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             body: self.fallible_fold_boxed(body)?,
             position,
         }))
@@ -1008,6 +1083,19 @@ pub trait FallibleExprFolder: Sized {
             position,
         }))
     }
+
+    fn fallible_fold_cast(&mut self, expr: Cast) -> Result<Expr, Self::Error> {
+        let Cast {
+            kind,
+            base,
+            position,
+        } = expr;
+        Ok(Expr::Cast(Cast {
+            kind,
+            base: self.fallible_fold_boxed(base)?,
+            position,
+        }))
+    }
 }
 
 pub fn default_fallible_fold_expr<U, T: FallibleExprFolder<Error = U>>(
@@ -1043,6 +1131,7 @@ pub fn default_fallible_fold_expr<U, T: FallibleExprFolder<Error = U>>(
         Expr::SnapApp(snap_app) => this.fallible_fold_snap_app(snap_app),
         Expr::ContainerOp(container_op) => this.fallible_fold_container_op(container_op),
         Expr::Seq(seq) => this.fallible_fold_seq(seq),
+        Expr::Cast(cast) => this.fallible_fold_cast(cast),
     }
 }
 
@@ -1145,19 +1234,35 @@ pub trait FallibleExprWalker: Sized {
     }
     fn fallible_walk_forall(&mut self, statement: &ForAll) -> Result<(), Self::Error> {
         let ForAll {
-            variables, body, ..
+            variables,
+            triggers,
+            body,
+            ..
         } = statement;
         for var in variables {
             self.fallible_walk_local_var(var)?;
+        }
+        for set in triggers {
+            for expr in set.elements() {
+                self.fallible_walk(expr)?;
+            }
         }
         self.fallible_walk(body)
     }
     fn fallible_walk_exists(&mut self, statement: &Exists) -> Result<(), Self::Error> {
         let Exists {
-            variables, body, ..
+            variables,
+            triggers,
+            body,
+            ..
         } = statement;
         for var in variables {
             self.fallible_walk_local_var(var)?;
+        }
+        for set in triggers {
+            for expr in set.elements() {
+                self.fallible_walk(expr)?;
+            }
         }
         self.fallible_walk(body)
     }
@@ -1241,6 +1346,7 @@ pub trait FallibleExprWalker: Sized {
         self.fallible_walk(enum_place)?;
         Ok(())
     }
+
     fn fallible_walk_snap_app(&mut self, statement: &SnapApp) -> Result<(), Self::Error> {
         let SnapApp { base, .. } = statement;
         self.fallible_walk(base)
@@ -1259,6 +1365,11 @@ pub trait FallibleExprWalker: Sized {
             self.fallible_walk(elem)?;
         }
         self.fallible_walk_type(typ)
+    }
+
+    fn fallible_walk_cast(&mut self, statement: &Cast) -> Result<(), Self::Error> {
+        let Cast { base, .. } = statement;
+        self.fallible_walk(base)
     }
 }
 
@@ -1295,5 +1406,6 @@ pub fn default_fallible_walk_expr<U, T: FallibleExprWalker<Error = U>>(
         Expr::SnapApp(snap_app) => this.fallible_walk_snap_app(snap_app),
         Expr::ContainerOp(container_op) => this.fallible_walk_container_op(container_op),
         Expr::Seq(seq) => this.fallible_walk_seq(seq),
+        Expr::Cast(cast) => this.fallible_walk_cast(cast),
     }
 }

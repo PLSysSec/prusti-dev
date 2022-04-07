@@ -64,6 +64,8 @@ pub enum Expr {
     Downcast(DowncastExpr),
     /// Snapshot call to convert from a Ref to a snapshot value
     SnapApp(SnapApp),
+    /// Cast from one type into another.
+    Cast(Cast),
 }
 
 impl fmt::Display for Expr {
@@ -94,6 +96,7 @@ impl fmt::Display for Expr {
             Expr::ContainerOp(container_op) => container_op.fmt(f),
             Expr::Seq(seq) => seq.fmt(f),
             Expr::Downcast(downcast_expr) => downcast_expr.fmt(f),
+            Expr::Cast(expr) => expr.fmt(f),
         }
     }
 }
@@ -122,6 +125,7 @@ impl Expr {
             | Expr::InhaleExhale(InhaleExhale { position, .. })
             | Expr::SnapApp(SnapApp { position, .. })
             | Expr::ContainerOp(ContainerOp { position, .. })
+            | Expr::Cast(Cast { position, .. })
             | Expr::Seq(Seq { position, .. }) => *position,
             Expr::Downcast(DowncastExpr { base, .. }) => base.pos(),
         }
@@ -323,6 +327,11 @@ impl Expr {
                 enum_place,
                 field,
             }),
+            Expr::Cast(Cast { kind, base, .. }) => Expr::Cast(Cast {
+                kind,
+                base,
+                position,
+            }),
         }
     }
 
@@ -402,6 +411,15 @@ impl Expr {
         Expr::UnaryOp(UnaryOp {
             op_kind: UnaryOpKind::Minus,
             argument: Box::new(expr),
+            position: Position::default(),
+        })
+    }
+
+    pub fn bin_op(op_kind: BinaryOpKind, left: Expr, right: Expr) -> Self {
+        Expr::BinOp(BinOp {
+            op_kind,
+            left: Box::new(left),
+            right: Box::new(right),
             position: Position::default(),
         })
     }
@@ -1177,6 +1195,46 @@ impl Expr {
                 Const::Int(..) | Const::BigInt(..) => &Type::Int,
                 Const::Float(FloatConst::F32(..)) => &Type::Float(Float::F32),
                 Const::Float(FloatConst::F64(..)) => &Type::Float(Float::F64),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV8),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV8)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV16),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV16)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV32),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV32)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV64),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV64)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Signed(BitVectorSize::BV128),
+                    ..
+                }) => &Type::BitVector(BitVector::Signed(BitVectorSize::BV128)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV8),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV8)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV16),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV16)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV32),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV32)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV64),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV64)),
+                Const::BitVector(BitVectorConst {
+                    typ: BitVector::Unsigned(BitVectorSize::BV128),
+                    ..
+                }) => &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV128)),
                 Const::FnPtr => &FN_PTR_TYPE,
             },
             Expr::BinOp(BinOp {
@@ -1198,7 +1256,15 @@ impl Expr {
                 | BinaryOpKind::Sub
                 | BinaryOpKind::Mul
                 | BinaryOpKind::Div
-                | BinaryOpKind::Mod => {
+                | BinaryOpKind::Mod
+                | BinaryOpKind::BitAnd
+                | BinaryOpKind::BitOr
+                | BinaryOpKind::BitXor
+                | BinaryOpKind::Shl
+                | BinaryOpKind::LShr
+                | BinaryOpKind::AShr
+                | BinaryOpKind::Min
+                | BinaryOpKind::Max => {
                     let typ1 = left.get_type();
                     let typ2 = right.get_type();
                     assert_eq!(typ1, typ2, "expr: {:?}", self);
@@ -1236,6 +1302,39 @@ impl Expr {
                 todo!("get_type container_op({:?}, {}, {})", op_kind, left, right)
             }
             Expr::Seq(Seq { typ, .. }) => typ,
+            Expr::Cast(Cast { kind, .. }) => match kind {
+                CastKind::BVIntoInt(_) => &Type::Int,
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV8)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV8))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV16)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV16))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV32)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV32))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV64)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV64))
+                }
+                CastKind::IntIntoBV(BitVector::Signed(BitVectorSize::BV128)) => {
+                    &Type::BitVector(BitVector::Signed(BitVectorSize::BV128))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV8)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV8))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV16)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV16))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV32)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV32))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV64)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV64))
+                }
+                CastKind::IntIntoBV(BitVector::Unsigned(BitVectorSize::BV128)) => {
+                    &Type::BitVector(BitVector::Unsigned(BitVectorSize::BV128))
+                }
+            },
         }
     }
 
@@ -1663,7 +1762,8 @@ impl Expr {
                     | Expr::Downcast(..)
                     | Expr::ContainerOp(..)
                     | Expr::Seq(..)
-                    | Expr::SnapApp(..) => true.into(),
+                    | Expr::SnapApp(..)
+                    | Expr::Cast(..) => true.into(),
                 }
             }
         }
@@ -1915,6 +2015,14 @@ pub enum BinaryOpKind {
     And,
     Or,
     Implies,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    LShr,
+    AShr,
+    Min,
+    Max,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -1932,7 +2040,19 @@ pub enum FloatConst {
 
 impl fmt::Display for FloatConst {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", &self)
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+pub struct BitVectorConst {
+    pub value: String,
+    pub typ: BitVector,
+}
+
+impl fmt::Display for BitVectorConst {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}({})", self.typ, self.value)
     }
 }
 
@@ -1942,6 +2062,7 @@ pub enum Const {
     Int(i64),
     BigInt(String),
     Float(FloatConst),
+    BitVector(BitVectorConst),
     /// All function pointers share the same constant, because their function
     /// is determined by the type system.
     FnPtr,
@@ -1968,7 +2089,7 @@ impl PartialEq for Local {
 
 impl Hash for Local {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&self.variable).hash(state);
+        (self.variable).hash(state);
     }
 }
 
@@ -2092,7 +2213,7 @@ impl PartialEq for ConstExpr {
 
 impl Hash for ConstExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&self.value).hash(state);
+        (self.value).hash(state);
     }
 }
 
@@ -2320,7 +2441,7 @@ impl fmt::Display for Unfolding {
             if let Some(variant_index) = &self.variant {
                 format!("{}<variant {}>", &self.predicate, variant_index)
             } else {
-                (&self.predicate).to_string()
+                (self.predicate).to_string()
             },
             &(self.arguments)
                 .iter()
@@ -2408,12 +2529,12 @@ impl fmt::Display for ForAll {
         write!(
             f,
             "forall {} {} :: {}",
-            (&self.variables)
+            (self.variables)
                 .iter()
                 .map(|x| format!("{:?}", x))
                 .collect::<Vec<String>>()
                 .join(", "),
-            (&self.triggers)
+            (self.triggers)
                 .iter()
                 .map(|x| x.to_string())
                 .collect::<Vec<String>>()
@@ -2449,12 +2570,12 @@ impl fmt::Display for Exists {
         write!(
             f,
             "exists {} {} :: {}",
-            (&self.variables)
+            (self.variables)
                 .iter()
                 .map(|x| format!("{:?}", x))
                 .collect::<Vec<String>>()
                 .join(", "),
-            (&self.triggers)
+            (self.triggers)
                 .iter()
                 .map(|x| x.to_string())
                 .collect::<Vec<String>>()
@@ -2632,6 +2753,37 @@ impl Hash for DowncastExpr {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum CastKind {
+    BVIntoInt(BitVector),
+    IntIntoBV(BitVector),
+}
+
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
+pub struct Cast {
+    pub kind: CastKind,
+    pub base: Box<Expr>,
+    pub position: Position,
+}
+
+impl fmt::Display for Cast {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "cast<{:?}>({})", self.kind, self.base)
+    }
+}
+
+impl PartialEq for Cast {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.base == other.base
+    }
+}
+
+impl Hash for Cast {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (&self.kind, &*self.base).hash(state);
+    }
+}
+
 #[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct SnapApp {
     pub base: Box<Expr>,
@@ -2652,7 +2804,7 @@ impl PartialEq for SnapApp {
 
 impl Hash for SnapApp {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&*self.base).hash(state);
+        (self.base).hash(state);
     }
 }
 
@@ -2682,6 +2834,14 @@ impl fmt::Display for BinaryOpKind {
             BinaryOpKind::And => write!(f, "&&"),
             BinaryOpKind::Or => write!(f, "||"),
             BinaryOpKind::Implies => write!(f, "==>"),
+            BinaryOpKind::BitAnd => write!(f, "&"),
+            BinaryOpKind::BitOr => write!(f, "|"),
+            BinaryOpKind::BitXor => write!(f, "^"),
+            BinaryOpKind::Shl => write!(f, "<<"),
+            BinaryOpKind::LShr => write!(f, ">>>"),
+            BinaryOpKind::AShr => write!(f, ">>"),
+            BinaryOpKind::Min => write!(f, "min"),
+            BinaryOpKind::Max => write!(f, "max"),
         }
     }
 }
@@ -2693,6 +2853,7 @@ impl fmt::Display for Const {
             Const::Int(val) => write!(f, "{}", val),
             Const::BigInt(ref val) => write!(f, "{}", val),
             Const::Float(val) => write!(f, "{:?}", val),
+            Const::BitVector(val) => write!(f, "{:?}", val),
             Const::FnPtr => write!(f, "FnPtr"),
         }
     }

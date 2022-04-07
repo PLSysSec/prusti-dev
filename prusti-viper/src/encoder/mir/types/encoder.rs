@@ -20,7 +20,10 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty;
 use rustc_span::MultiSpan;
 
-use vir_crate::high::{self as vir};
+use vir_crate::{
+    common::expression::BinaryOperationHelpers,
+    high::{self as vir},
+};
 
 pub struct TypeEncoder<'p, 'v: 'p, 'tcx: 'v> {
     encoder: &'p Encoder<'v, 'tcx>,
@@ -61,9 +64,13 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
         format!("fndef${}", self.encoder.encode_item_name(did))
     }
 
-    fn compute_array_len(&self, size: &ty::Const<'tcx>) -> u64 {
+    fn encode_lifetime_name(&self, region: &ty::Region) -> String {
+        self.encoder.encode_lifetime_name(region)
+    }
+
+    fn compute_array_len(&self, size: ty::Const<'tcx>) -> u64 {
         self.encoder
-            .const_eval_intlike(&size.val)
+            .const_eval_intlike(size.val())
             .unwrap()
             .to_u64()
             .unwrap()
@@ -95,27 +102,31 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
             ty::TyKind::Float(ty::FloatTy::F64) => vir::Type::Float(vir::ty::Float::F64),
 
             ty::TyKind::RawPtr(ty::TypeAndMut { ty, .. }) => {
-                vir::Type::pointer(self.encoder.encode_type_high(ty)?)
+                vir::Type::pointer(self.encoder.encode_type_high(*ty)?)
             }
 
-            ty::TyKind::Ref(_, ty, _) => vir::Type::reference(self.encoder.encode_type_high(ty)?),
+            ty::TyKind::Ref(region, ty, _) => {
+                let lft_name = self.encode_lifetime_name(region);
+                let lifetime = vir::ty::Lifetime { name: lft_name };
+                vir::Type::reference(self.encoder.encode_type_high(*ty)?, lifetime)
+            }
 
             ty::TyKind::Adt(adt_def, substs) if adt_def.is_struct() => vir::Type::struct_(
-                encode_struct_name(self.encoder, adt_def.did),
+                encode_struct_name(self.encoder, adt_def.did()),
                 self.encode_substs(substs),
             ),
 
             ty::TyKind::Adt(adt_def, substs) if adt_def.is_enum() => {
-                if adt_def.variants.len() == 1 {
+                if adt_def.variants().len() == 1 {
                     // FIXME: Currently fold-unfold assumes that everything that
                     // has only a single variant is a struct.
                     vir::Type::struct_(
-                        encode_struct_name(self.encoder, adt_def.did),
+                        encode_struct_name(self.encoder, adt_def.did()),
                         self.encode_substs(substs),
                     )
                 } else {
                     vir::Type::enum_(
-                        self.encode_enum_name(adt_def.did),
+                        self.encode_enum_name(adt_def.did()),
                         self.encode_substs(substs),
                         None,
                     )
@@ -123,8 +134,9 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
             }
 
             ty::TyKind::Adt(adt_def, substs) if adt_def.is_union() => vir::Type::union_(
-                self.encode_union_name(adt_def.did),
+                self.encode_union_name(adt_def.did()),
                 self.encode_substs(substs),
+                None,
             ),
 
             ty::TyKind::Adt(_adt_def, _substs) => {
@@ -134,7 +146,7 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
             ty::TyKind::Tuple(elems) => vir::Type::tuple(
                 elems
                     .iter()
-                    .filter_map(|ty| self.encoder.encode_type_high(ty.expect_ty()).ok())
+                    .filter_map(|ty| self.encoder.encode_type_high(ty).ok())
                     .collect(),
             ),
 
@@ -143,11 +155,13 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
             ty::TyKind::Str => vir::Type::Str,
 
             ty::TyKind::Array(elem_ty, size) => {
-                let array_len = self.compute_array_len(size);
-                vir::Type::array(array_len, self.encoder.encode_type_high(elem_ty)?)
+                let array_len = self.compute_array_len(*size);
+                vir::Type::array(array_len, self.encoder.encode_type_high(*elem_ty)?)
             }
 
-            ty::TyKind::Slice(elem_ty) => vir::Type::slice(self.encoder.encode_type_high(elem_ty)?),
+            ty::TyKind::Slice(elem_ty) => {
+                vir::Type::slice(self.encoder.encode_type_high(*elem_ty)?)
+            }
 
             ty::TyKind::Closure(def_id, _substs) => vir::Type::closure(
                 self.encode_closure_name(*def_id),
@@ -207,7 +221,7 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
             | ty::TyKind::Placeholder(_)
             | ty::TyKind::Infer(_)
             | ty::TyKind::Error(_) => MultiSpan::new(),
-            ty::TyKind::Adt(adt, _) => self.encoder.env().get_def_span(adt.did).into(),
+            ty::TyKind::Adt(adt, _) => self.encoder.env().get_def_span(adt.did()).into(),
             ty::TyKind::Foreign(did)
             | ty::TyKind::FnDef(did, _)
             | ty::TyKind::Closure(did, _)
@@ -273,7 +287,7 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
                 }
                 if config::encode_unsigned_num_constraint() && lower_bound.is_none() {
                     if let ty::TyKind::Uint(_) = self.ty.kind() {
-                        lower_bound = Some(Box::new(0.into()));
+                        lower_bound = Some(Box::new(0usize.into()));
                     }
                 }
                 vir::TypeDecl::int(lower_bound, upper_bound)
@@ -289,22 +303,32 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
                 }
                 vir::TypeDecl::float(lower_bound, upper_bound)
             }
-            ty::TyKind::Ref(_, ty, _) => {
-                let target_type = self.encoder.encode_type_high(ty)?;
-                vir::TypeDecl::reference(target_type)
+            ty::TyKind::RawPtr(rustc_middle::ty::TypeAndMut { ty, mutbl: _ }) => {
+                let target_type = self.encoder.encode_type_high(*ty)?;
+                vir::TypeDecl::pointer(target_type)
+            }
+            ty::TyKind::Ref(region, ty, _) => {
+                let target_type = self.encoder.encode_type_high(*ty)?;
+                let lft_name = self.encode_lifetime_name(region);
+                let lifetime = vir_crate::high::type_decl::Lifetime { name: lft_name };
+                vir::TypeDecl::reference(target_type, lifetime)
             }
             ty::TyKind::Tuple(elems) => vir::TypeDecl::tuple(
                 elems
-                    .iter()
-                    .filter_map(|ty| self.encoder.encode_type_high(ty.expect_ty()).ok())
+                    .into_iter()
+                    .filter_map(|ty| self.encoder.encode_type_high(ty).ok())
                     .collect(),
             ),
             ty::TyKind::Adt(adt_def, substs) => {
-                encode_adt_def(self.encoder, adt_def, substs, None)?
+                encode_adt_def(self.encoder, *adt_def, substs, None)?
             }
             ty::TyKind::Never => vir::TypeDecl::never(),
             ty::TyKind::Param(param_ty) => {
-                vir::TypeDecl::type_var(param_ty.name.as_str().to_string())
+                vir::TypeDecl::type_var(vir_crate::high::type_decl::TypeVar::GenericType(
+                    vir_crate::high::type_decl::GenericType {
+                        name: param_ty.name.as_str().to_string(),
+                    },
+                ))
             }
             ty::TyKind::Closure(def_id, internal_substs) => {
                 let cl_substs = internal_substs.as_closure();
@@ -316,8 +340,8 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
                 vir::TypeDecl::closure(name, arguments)
             }
             ty::TyKind::Array(elem_ty, size) => {
-                let array_len = self.compute_array_len(size);
-                vir::TypeDecl::array(array_len, self.encoder.encode_type_high(elem_ty)?)
+                let array_len = self.compute_array_len(*size);
+                vir::TypeDecl::array(array_len, self.encoder.encode_type_high(*elem_ty)?)
             }
             ref ty_variant => {
                 debug!("Encoding of type '{:?}' is incomplete", ty_variant);
@@ -380,7 +404,7 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
     //             "tuple",
     //             elems
     //                 .iter()
-    //                 .filter_map(|ty| self.encoder.encode_type(ty.expect_ty()).ok())
+    //                 .filter_map(|ty| self.encoder.encode_type(ty).ok())
     //                 .collect(),
     //         ),
 
@@ -494,7 +518,7 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
         //             let _cleanup_token = self.encoder.push_temp_tymap(tymap);
 
         //             let mut exprs: Vec<vir::Expression> = vec![];
-        //             let num_variants = adt_def.variants.len();
+        //             let num_variants = adt_def.variants().len();
         //             let tcx = self.encoder.env().tcx();
 
         //             let specs: Vec<typed::SpecificationSet> = Vec::new();
@@ -660,7 +684,9 @@ impl<'p, 'v, 'r: 'v, 'tcx: 'v> TypeEncoder<'p, 'v, 'tcx> {
             ty::TyKind::Param(_param_ty) => None,
             _ => {
                 // FIXME: This looks very fishy!!!
-                let value = self.ty as *const ty::TyS<'tcx> as usize;
+                // It relies on the implementation detail that each `ty::TyS` instance has its own
+                // `TyKind` instance; not an interned one.
+                let value = self.ty.kind() as *const _ as usize;
                 Some(value.into())
             }
         };
@@ -722,10 +748,11 @@ fn encode_variant<'v, 'tcx: 'v>(
 
 pub(super) fn encode_adt_def<'v, 'tcx>(
     encoder: &Encoder<'v, 'tcx>,
-    adt_def: &'tcx ty::AdtDef,
+    adt_def: ty::AdtDef<'tcx>,
     substs: ty::subst::SubstsRef<'tcx>,
     variant_index: Option<rustc_target::abi::VariantIdx>,
 ) -> SpannedEncodingResult<vir::TypeDecl> {
+    let tcx = encoder.env().tcx();
     if adt_def.is_box() {
         debug!("ADT {:?} is a box", adt_def);
         assert!(variant_index.is_none());
@@ -735,34 +762,60 @@ pub(super) fn encode_adt_def<'v, 'tcx>(
     } else if adt_def.is_struct() {
         debug!("ADT {:?} is a struct", adt_def);
         assert!(variant_index.is_none());
-        let name = encode_struct_name(encoder, adt_def.did);
+        let name = encode_struct_name(encoder, adt_def.did());
         let variant = adt_def.non_enum_variant();
         Ok(vir::TypeDecl::Struct(encode_variant(
             encoder, name, substs, variant,
         )?))
     } else if adt_def.is_union() {
         debug!("ADT {:?} is a union", adt_def);
+        if !config::unsafe_core_proof() {
+            return Err(SpannedEncodingError::unsupported(
+                "unions are not supported",
+                encoder.env().get_def_span(adt_def.did()),
+            ));
+        }
         assert!(variant_index.is_none());
-        Err(SpannedEncodingError::unsupported(
-            "unions are not supported",
-            encoder.env().get_def_span(adt_def.did),
+        let name = encode_struct_name(encoder, adt_def.did());
+        // We treat union fields as variants.
+        let variant = adt_def.non_enum_variant();
+        let num_variants = variant.fields.len();
+        let discriminant = vir::Expression::discriminant();
+        let discriminant_bounds = vir::Expression::and(
+            vir::Expression::less_equals(0.into(), discriminant.clone()),
+            vir::Expression::less_than(discriminant, num_variants.into()),
+        );
+        let discriminant_values = (0..num_variants).map(|value| value.into()).collect();
+        let mut variants = Vec::new();
+        for field in &variant.fields {
+            let field_name = field.ident(tcx).as_str().to_string();
+            let field_ty = field.ty(tcx, substs);
+            let encoded_field = vir::FieldDecl::new("value", encoder.encode_type_high(field_ty)?);
+            let variant = vir::type_decl::Struct::new(field_name, vec![encoded_field]);
+            variants.push(variant);
+        }
+        Ok(vir::TypeDecl::union_(
+            name,
+            vir::Type::Int(vir::ty::Int::Usize),
+            discriminant_bounds,
+            discriminant_values,
+            variants,
         ))
     } else if adt_def.is_enum() {
         debug!("ADT {:?} is an enum", adt_def);
-        let name = encode_struct_name(encoder, adt_def.did);
-        let num_variants = adt_def.variants.len();
+        let name = encode_struct_name(encoder, adt_def.did());
+        let num_variants = adt_def.variants().len();
         debug!("ADT {:?} is enum with {} variants", adt_def, num_variants);
         let type_decl = if num_variants == 1 {
             // FIXME: Currently fold-unfold assumes that everything that
             // has only a single variant is a struct.
-            let variant = &adt_def.variants[0usize.into()];
+            let variant = &adt_def.variants()[0usize.into()];
             vir::TypeDecl::Struct(encode_variant(encoder, name, substs, variant)?)
         } else if let Some(_variant_index) = variant_index {
-            // let variant = &adt_def.variants[variant_index];
+            // let variant = &adt_def.variants()[variant_index];
             // vir::TypeDecl::Struct(encode_variant(encoder, name, substs, variant)?)
             unimplemented!("FIXME: How this should be implemented?")
         } else {
-            let tcx = encoder.env().tcx();
             let discriminant = vir::Expression::discriminant();
             let discriminant_bounds = compute_discriminant_bounds_high(adt_def, tcx, &discriminant);
             let discriminant_values = compute_discriminant_values(adt_def, tcx)
@@ -770,18 +823,49 @@ pub(super) fn encode_adt_def<'v, 'tcx>(
                 .map(|value| value.into())
                 .collect();
             let mut variants = Vec::new();
-            for variant in &adt_def.variants {
+            for variant in adt_def.variants() {
                 let name = variant.ident(tcx).to_string();
                 let encoded_variant = encode_variant(encoder, name, substs, variant)?;
                 variants.push(encoded_variant);
             }
-            vir::TypeDecl::enum_(name, discriminant_bounds, discriminant_values, variants)
+            let mir_discriminant_type = match adt_def.repr().discr_type() {
+                rustc_attr::IntType::SignedInt(int) => {
+                    let int = match int {
+                        rustc_ast::ast::IntTy::Isize => rustc_middle::ty::IntTy::Isize,
+                        rustc_ast::ast::IntTy::I8 => rustc_middle::ty::IntTy::I8,
+                        rustc_ast::ast::IntTy::I16 => rustc_middle::ty::IntTy::I16,
+                        rustc_ast::ast::IntTy::I32 => rustc_middle::ty::IntTy::I32,
+                        rustc_ast::ast::IntTy::I64 => rustc_middle::ty::IntTy::I64,
+                        rustc_ast::ast::IntTy::I128 => rustc_middle::ty::IntTy::I128,
+                    };
+                    encoder.env().tcx().mk_ty(ty::TyKind::Int(int))
+                }
+                rustc_attr::IntType::UnsignedInt(uint) => {
+                    let uint = match uint {
+                        rustc_ast::ast::UintTy::Usize => rustc_middle::ty::UintTy::Usize,
+                        rustc_ast::ast::UintTy::U8 => rustc_middle::ty::UintTy::U8,
+                        rustc_ast::ast::UintTy::U16 => rustc_middle::ty::UintTy::U16,
+                        rustc_ast::ast::UintTy::U32 => rustc_middle::ty::UintTy::U32,
+                        rustc_ast::ast::UintTy::U64 => rustc_middle::ty::UintTy::U64,
+                        rustc_ast::ast::UintTy::U128 => rustc_middle::ty::UintTy::U128,
+                    };
+                    encoder.env().tcx().mk_ty(ty::TyKind::Uint(uint))
+                }
+            };
+            let discriminant_type = encoder.encode_type_high(mir_discriminant_type)?;
+            vir::TypeDecl::enum_(
+                name,
+                discriminant_type,
+                discriminant_bounds,
+                discriminant_values,
+                variants,
+            )
         };
         Ok(type_decl)
     } else {
         Err(SpannedEncodingError::internal(
             format!("unexpected variant of adt_def: {:?}", adt_def),
-            encoder.env().get_def_span(adt_def.did),
+            encoder.env().get_def_span(adt_def.did()),
         ))
     }
 }

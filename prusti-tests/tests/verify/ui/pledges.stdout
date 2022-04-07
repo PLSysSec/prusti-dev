@@ -24,7 +24,7 @@ struct T {
     g: u32,
 }
 fn borrows(_x: &mut u32) {
-    let mut a = T{f: 1, g: 2,};
+    let mut a = T { f: 1, g: 2 };
     if !(a.f == 1) { ::core::panicking::panic("assertion failed: a.f == 1") };
     if !(a.g == 2) { ::core::panicking::panic("assertion failed: a.g == 2") };
     let x = &mut a;
@@ -35,7 +35,7 @@ fn borrows(_x: &mut u32) {
     if !(a.f == 5) { ::core::panicking::panic("assertion failed: a.f == 5") };
 }
 fn borrows_fail(_x: &mut u32) {
-    let mut a = T{f: 1, g: 2,};
+    let mut a = T { f: 1, g: 2 };
     if !(a.f == 1) { ::core::panicking::panic("assertion failed: a.f == 1") };
     if !(a.g == 2) { ::core::panicking::panic("assertion failed: a.g == 2") };
     let x = &mut a;
@@ -49,10 +49,7 @@ fn borrows_fail(_x: &mut u32) {
 #[prusti::spec_only]
 #[prusti::spec_id = "$(NUM_UUID)"]
 fn prusti_pledge_item_reborrow_$(NUM_UUID)<'a>(x:
-                                                                        &'a mut T,
-                                                                    result:
-                                                                        &'a mut u32)
- -> bool {
+        &'a mut T, result: &'a mut u32) -> bool {
     !!((before_expiry(*result) == x.f): bool)
 }
 #[prusti::pledge_spec_id_ref = "$(NUM_UUID)"]
@@ -66,4 +63,4 @@ fn reborrow_caller(a: T) {
     if !(a.f == 5) { ::core::panicking::panic("assertion failed: a.f == 5") };
 }
 fn main() {}
-Procedure(ProcedureSpecification { pres: [], posts: [], pledges: [Pledge { reference: None, lhs: None, rhs: DefId(0:12 ~ pledges[$(CRATE_ID)]::prusti_pledge_item_reborrow_$(NUM_UUID)) }], predicate_body: None, pure: false, trusted: false })
+Procedure(ProcedureSpecification { kind: Inherent(Impure), pres: Empty, posts: Empty, pledges: Inherent([Pledge { reference: None, lhs: None, rhs: DefId(0:12 ~ pledges[$(CRATE_ID)]::prusti_pledge_item_reborrow_$(NUM_UUID)) }]), trusted: Inherent(false) })

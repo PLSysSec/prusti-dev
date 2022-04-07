@@ -2,7 +2,7 @@ use crate::common::display;
 
 #[derive_helpers]
 #[derive_visitors]
-#[derive(derive_more::IsVariant)]
+#[derive(derive_more::IsVariant, derive_more::Unwrap)]
 pub enum Type {
     /// Mathematical boolean that corresponds to Viper's Bool.
     MBool,
@@ -34,6 +34,7 @@ pub enum Type {
     Unsupported(Unsupported),
 }
 
+#[derive(Copy)]
 pub enum Int {
     I8,
     I16,
@@ -57,8 +58,21 @@ pub enum Float {
     F64,
 }
 
-pub struct TypeVar {
+#[display(fmt = "{}", name)]
+pub struct Lifetime {
     pub name: String,
+}
+
+#[display(fmt = "{}", name)]
+pub struct GenericType {
+    pub name: String,
+}
+
+#[derive_helpers]
+#[derive(derive_more::Unwrap)]
+pub enum TypeVar {
+    Lifetime(Lifetime),
+    GenericType(GenericType),
 }
 
 #[display(fmt = "({})", "display::cjoin(arguments)")]
@@ -98,6 +112,8 @@ pub struct Union {
     pub name: String,
     /// Type arguments.
     pub arguments: Vec<Type>,
+    /// A specific field of the union that this type represents.
+    pub variant: Option<VariantIndex>,
 }
 
 #[display(fmt = "Array({}, {})", length, element_type)]
@@ -114,6 +130,7 @@ pub struct Slice {
 #[display(fmt = "&{}", target_type)]
 pub struct Reference {
     pub target_type: Box<Type>,
+    pub lifetime: Lifetime,
 }
 
 #[display(fmt = "*{}", target_type)]

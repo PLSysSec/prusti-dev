@@ -9,9 +9,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use crate::environment::Environment;
 use crate::PrustiError;
-use crate::utils::{
-    has_extern_spec_attr, read_prusti_attr, read_prusti_attrs, has_prusti_attr
-};
+use crate::utils::{has_extern_spec_attr, read_prusti_attr, read_prusti_attrs, has_prusti_attr};
 use log::debug;
 
 pub mod external;
@@ -22,6 +20,7 @@ use typed::SpecIdRef;
 
 use crate::specs::external::ExternSpecResolver;
 use prusti_specs::specifications::common::SpecificationId;
+use crate::specs::typed::{ProcedureSpecificationKind, SpecificationItem};
 
 #[derive(Debug)]
 struct ProcedureSpecRefs {
@@ -37,7 +36,7 @@ struct ProcedureSpecRefs {
 pub struct SpecCollector<'a, 'tcx: 'a> {
     tcx: TyCtxt<'tcx>,
     env: &'a Environment<'tcx>,
-    extern_resolver: ExternSpecResolver<'tcx>,
+    extern_resolver: ExternSpecResolver<'a, 'tcx>,
 
     /// Map from specification IDs to their typed expressions.
     spec_functions: HashMap<SpecificationId, LocalDefId>,
@@ -53,7 +52,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
         Self {
             tcx,
             env,
-            extern_resolver: ExternSpecResolver::new(tcx),
+            extern_resolver: ExternSpecResolver::new(env),
             spec_functions: HashMap::new(),
             procedure_specs: HashMap::new(),
             loop_specs: vec![],
@@ -67,15 +66,23 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
         self.determine_loop_specs(&mut def_spec);
         self.determine_struct_specs(&mut def_spec);
         // TODO: remove spec functions (make sure none are duplicated or left over)
+
         def_spec
     }
 
     fn determine_procedure_specs(&self, def_spec: &mut typed::DefSpecificationMap) {
+        // First: Build specs as they are typed by the user
         for (local_id, refs) in self.procedure_specs.iter() {
             let mut pres = vec![];
             let mut posts = vec![];
             let mut pledges = vec![];
-            let mut predicate_body = None;
+
+            let mut kind = if refs.pure {
+                ProcedureSpecificationKind::Pure
+            } else {
+                ProcedureSpecificationKind::Impure
+            };
+
             for spec_id_ref in &refs.spec_id_refs {
                 match spec_id_ref {
                     SpecIdRef::Precondition(spec_id) => {
@@ -92,39 +99,52 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
                         });
                     }
                     SpecIdRef::Predicate(spec_id) => {
-                        predicate_body = Some(*self.spec_functions.get(spec_id).unwrap());
+                        kind = ProcedureSpecificationKind::Predicate(*self.spec_functions.get(spec_id).unwrap());
                     }
                 }
             }
+
+            // Wrap everything into a specification item
+            let pres = SpecificationItem::new(pres);
+            let posts = SpecificationItem::new(posts);
+            let pledges = SpecificationItem::new(pledges);
+            let trusted = SpecificationItem::Inherent(refs.trusted);
+
+            // We never create an empty kind. This would lead to refinement inheritance
+            // if there is a trait involved.
+            // Instead, we require the user to explicitly make annotations
+            let kind = SpecificationItem::Inherent(kind);
+
             def_spec.specs.insert(
                 *local_id,
                 typed::SpecificationSet::Procedure(typed::ProcedureSpecification {
                     pres,
                     posts,
                     pledges,
-                    predicate_body,
-                    pure: refs.pure,
-                    trusted: refs.trusted,
+                    kind,
+                    trusted,
                 })
             );
         }
     }
 
     fn determine_extern_specs(&self, def_spec: &mut typed::DefSpecificationMap) {
-        self.extern_resolver.check_duplicates(self.env);
-        // TODO: do something with the traits
-        for (real_id, (_, spec_id)) in self.extern_resolver.extern_fn_map.iter() {
-            if let Some(local_id) = real_id.as_local() {
+        self.extern_resolver.check_errors(self.env);
+        for (extern_spec_decl, spec_id) in self.extern_resolver.extern_fn_map.iter() {
+            let target_def_id = extern_spec_decl.get_target_def_id();
+
+            if let Some(local_id) = target_def_id.as_local() {
                 if def_spec.specs.contains_key(&local_id) {
                     PrustiError::incorrect(
                         format!("external specification provided for {}, which already has a specification",
-                            self.env.get_item_name(*real_id)),
+                                self.env.get_item_name(target_def_id)),
                         MultiSpan::from_span(self.env.get_def_span(*spec_id)),
                     ).emit(self.env);
                 }
             }
-            if let Some(_spec) = def_spec.specs.get(&spec_id.expect_local()) {
-                def_spec.extern_specs.insert(*real_id, spec_id.expect_local());
+
+            if def_spec.specs.get(&spec_id.expect_local()).is_some() {
+                def_spec.extern_specs.insert(target_def_id, spec_id.expect_local());
             }
         }
     }
@@ -167,6 +187,16 @@ fn get_procedure_spec_ids(def_id: DefId, attrs: &[ast::Attribute]) -> Option<Pro
             |raw_spec_id| SpecIdRef::Pledge { lhs: None, rhs: parse_spec_id(raw_spec_id, def_id) }
         )
     );
+    match (
+        read_prusti_attr("assert_pledge_spec_id_ref_lhs", attrs),
+        read_prusti_attr("assert_pledge_spec_id_ref_rhs", attrs)
+    ) {
+        (Some(lhs_id), Some(rhs_id)) => {
+            spec_id_refs.push(SpecIdRef::Pledge { lhs: Some(parse_spec_id(lhs_id, def_id)), rhs: parse_spec_id(rhs_id, def_id) });
+        }
+        (None, None) => {},
+        _ => unreachable!(),
+    }
     spec_id_refs.extend(
         read_prusti_attr("pred_spec_id_ref", attrs).map(
             |raw_spec_id| SpecIdRef::Predicate(parse_spec_id(raw_spec_id, def_id))
@@ -190,10 +220,10 @@ fn get_procedure_spec_ids(def_id: DefId, attrs: &[ast::Attribute]) -> Option<Pro
 
 impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
     type Map = Map<'tcx>;
+    type NestedFilter = rustc_middle::hir::nested_filter::All;
 
-    fn nested_visit_map(&mut self) -> intravisit::NestedVisitorMap<Self::Map> {
-        let map = self.tcx.hir();
-        intravisit::NestedVisitorMap::All(map)
+    fn nested_visit_map(&mut self) -> Self::Map {
+        self.tcx.hir()
     }
 
     fn visit_trait_item(
@@ -241,7 +271,9 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
 
             // Collect external function specifications
             if has_extern_spec_attr(attrs) {
-                self.extern_resolver.add_extern_fn(fn_kind, fn_decl, body_id, span, id);
+                let attr = read_prusti_attr("extern_spec", attrs).unwrap_or_default();
+                let kind = prusti_specs::ExternSpecKind::try_from(attr).unwrap();
+                self.extern_resolver.add_extern_fn(fn_kind, fn_decl, body_id, span, id, kind);
             }
 
             // Collect procedure specifications

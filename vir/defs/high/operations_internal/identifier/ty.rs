@@ -45,6 +45,21 @@ impl WithIdentifier for ty::Float {
 
 impl WithIdentifier for ty::TypeVar {
     fn get_identifier(&self) -> String {
+        match self {
+            ty::TypeVar::Lifetime(type_var) => type_var.get_identifier(),
+            ty::TypeVar::GenericType(type_var) => type_var.get_identifier(),
+        }
+    }
+}
+
+impl WithIdentifier for ty::Lifetime {
+    fn get_identifier(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl WithIdentifier for ty::GenericType {
+    fn get_identifier(&self) -> String {
         self.name.clone()
     }
 }
@@ -83,6 +98,12 @@ impl WithIdentifier for ty::Enum {
 impl WithIdentifier for ty::Union {
     fn get_identifier(&self) -> String {
         let mut identifier = self.name.clone();
+        identifier.push('$');
+        if let Some(variant) = &self.variant {
+            identifier.push_str(&variant.index);
+        } else {
+            identifier.push('_');
+        }
         append_type_arguments(&mut identifier, &self.arguments);
         identifier
     }

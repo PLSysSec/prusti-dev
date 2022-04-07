@@ -3,7 +3,8 @@ use crate::common::display;
 
 #[derive_helpers]
 #[derive_visitors]
-#[derive(derive_more::From, derive_more::IsVariant)]
+#[derive(derive_more::From, derive_more::IsVariant, derive_more::Unwrap)]
+#[allow(clippy::large_enum_variant)]
 pub enum TypeDecl {
     Bool,
     Int(Int),
@@ -12,11 +13,11 @@ pub enum TypeDecl {
     Tuple(Tuple),
     Struct(Struct),
     Enum(Enum),
-    // Union(Union),
+    Union(Union),
     Array(Array),
     // Slice(Slice),
     Reference(Reference),
-    // Pointer(Pointer),
+    Pointer(Pointer),
     // FnPointer,
     Never,
     // Str,
@@ -45,8 +46,21 @@ pub struct Float {
     pub upper_bound: Option<Box<Expression>>,
 }
 
-pub struct TypeVar {
+#[display(fmt = "{}", name)]
+pub struct Lifetime {
     pub name: String,
+}
+
+#[display(fmt = "{}", name)]
+pub struct GenericType {
+    pub name: String,
+}
+
+#[derive_helpers]
+#[derive(derive_more::Unwrap)]
+pub enum TypeVar {
+    Lifetime(Lifetime),
+    GenericType(GenericType),
 }
 
 #[display(fmt = "({})", "display::cjoin(arguments)")]
@@ -71,6 +85,16 @@ pub struct Struct {
 #[display(fmt = "{}", name)]
 pub struct Enum {
     pub name: String,
+    pub discriminant_type: Type,
+    pub discriminant_bounds: Expression,
+    pub discriminant_values: Vec<Expression>,
+    pub variants: Vec<Struct>,
+}
+
+#[display(fmt = "{}", name)]
+pub struct Union {
+    pub name: String,
+    pub discriminant_type: Type,
     pub discriminant_bounds: Expression,
     pub discriminant_values: Vec<Expression>,
     pub variants: Vec<Struct>,
@@ -84,6 +108,12 @@ pub struct Array {
 
 #[display(fmt = "&{}", target_type)]
 pub struct Reference {
+    pub target_type: Type,
+    pub lifetime: Lifetime,
+}
+
+#[display(fmt = "*{}", target_type)]
+pub struct Pointer {
     pub target_type: Type,
 }
 

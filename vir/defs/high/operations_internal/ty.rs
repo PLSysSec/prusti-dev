@@ -18,8 +18,20 @@ impl Type {
                 arguments,
                 variant: Some(variant),
             }),
-            Type::Enum(Enum { .. }) => {
+            Type::Union(Union {
+                name,
+                arguments,
+                variant: None,
+            }) => Type::Union(Union {
+                name,
+                arguments,
+                variant: Some(variant),
+            }),
+            Type::Enum(_) => {
                 unreachable!("setting variant on enum type that already has variant set");
+            }
+            Type::Union(_) => {
+                unreachable!("setting variant on union type that already has variant set");
             }
             _ => {
                 unreachable!("setting variant on non-enum type");
@@ -39,11 +51,34 @@ impl Type {
                 arguments: arguments.clone(),
                 variant: None,
             })),
+            Type::Union(Union {
+                name,
+                arguments,
+                variant: Some(_),
+            }) => Some(Type::Union(Union {
+                name: name.clone(),
+                arguments: arguments.clone(),
+                variant: None,
+            })),
             _ => None,
         }
     }
     pub fn is_heap_primitive(&self) -> bool {
         self.is_bool() || self.is_int() || self.is_float()
+    }
+    pub fn has_variants(&self) -> bool {
+        match self {
+            Type::Enum(enum_ty) => enum_ty.variant.is_none(),
+            Type::Union(union_ty) => union_ty.variant.is_none(),
+            _ => false,
+        }
+    }
+    pub fn erase_lifetime(&mut self) {
+        if let Type::Reference(reference) = self {
+            reference.lifetime = Lifetime {
+                name: String::from("pure_erased"),
+            };
+        }
     }
 }
 
@@ -70,6 +105,29 @@ impl super::super::ast::type_decl::Enum {
                     .unwrap_or(false)
             })
         }
+    }
+    pub fn get_discriminant(&self, variant_index: &VariantIndex) -> Option<&Expression> {
+        self.iter_discriminant_variants()
+            .find(|(_, variant)| variant_index.as_ref() == variant.name)
+            .map(|(discriminant, _)| discriminant)
+    }
+    pub fn iter_discriminant_variants(
+        &self,
+    ) -> impl Iterator<Item = (&Expression, &super::super::ast::type_decl::Struct)> {
+        self.discriminant_values.iter().zip(&self.variants)
+    }
+}
+
+impl super::super::ast::type_decl::Union {
+    pub fn get_discriminant(&self, variant_index: &VariantIndex) -> Option<&Expression> {
+        self.iter_discriminant_variants()
+            .find(|(_, variant)| variant_index.as_ref() == variant.name)
+            .map(|(discriminant, _)| discriminant)
+    }
+    pub fn iter_discriminant_variants(
+        &self,
+    ) -> impl Iterator<Item = (&Expression, &super::super::ast::type_decl::Struct)> {
+        self.discriminant_values.iter().zip(&self.variants)
     }
 }
 
@@ -175,7 +233,7 @@ impl Typed for Expression {
             Expression::LabelledOld(expression) => expression.get_type(),
             Expression::Constant(expression) => expression.get_type(),
             Expression::UnaryOp(expression) => expression.get_type(),
-            Expression::BinOp(expression) => expression.get_type(),
+            Expression::BinaryOp(expression) => expression.get_type(),
             Expression::ContainerOp(expression) => expression.get_type(),
             Expression::Seq(expression) => expression.get_type(),
             Expression::Conditional(expression) => expression.get_type(),
@@ -196,7 +254,7 @@ impl Typed for Expression {
             Expression::LabelledOld(expression) => expression.set_type(new_type),
             Expression::Constant(expression) => expression.set_type(new_type),
             Expression::UnaryOp(expression) => expression.set_type(new_type),
-            Expression::BinOp(expression) => expression.set_type(new_type),
+            Expression::BinaryOp(expression) => expression.set_type(new_type),
             Expression::ContainerOp(expression) => expression.set_type(new_type),
             Expression::Seq(expression) => expression.set_type(new_type),
             Expression::Conditional(expression) => expression.set_type(new_type),
@@ -288,7 +346,7 @@ impl Typed for UnaryOp {
     }
 }
 
-impl Typed for BinOp {
+impl Typed for BinaryOp {
     fn get_type(&self) -> &Type {
         match self.op_kind {
             BinaryOpKind::EqCmp
