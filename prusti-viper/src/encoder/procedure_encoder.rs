@@ -2221,9 +2221,8 @@ impl<'p, 'v: 'p, 'tcx: 'v> ProcedureEncoder<'p, 'v, 'tcx> {
                                         term.source_info.span,
                                         args,
                                         destination,
-                                        def_id,
-                                        tymap,
-                                        substs,
+                                        called_def_id,
+                                        call_substs,
                                     )
                                 })?
                             );
